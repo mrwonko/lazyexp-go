@@ -69,3 +69,31 @@ func TestShouldFetchLazilyOnce(t *testing.T) {
 		t.Errorf("still expected 1 fetch after getting sum again, got %d", oneFetchCount)
 	}
 }
+
+func TestShouldFetchInParallel(t *testing.T) {
+	// two leafs that block until the other one is being evaluated
+	fetchStarted := [...]chan struct{}{
+		make(chan struct{}, 1),
+		make(chan struct{}, 1),
+	}
+	leafs := [2]ConstNode{}
+	for i := range leafs {
+		j := i
+		leafs[i] = ConstNode{
+			FetchValue: func() int {
+				close(fetchStarted[j])
+				// wait for other node to be fetched
+				<-fetchStarted[1-j]
+				return j
+			},
+		}
+	}
+	root := SumNode{
+		LHS: &leafs[0],
+		RHS: &leafs[1],
+	}
+	// this will block indefinitely if the values are fetched sequentially
+	if got := root.Value(); got != 1 {
+		t.Errorf("expected 0+1=1, got %d", got)
+	}
+}
