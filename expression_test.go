@@ -29,15 +29,12 @@ func (s *SumNode) Value() int {
 	s.once.Do(func() {
 		var lhsVal, rhsVal int
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(1)
 		go func() {
 			lhsVal = s.LHS.Value()
 			wg.Done()
 		}()
-		go func() {
-			rhsVal = s.RHS.Value()
-			wg.Done()
-		}()
+		rhsVal = s.RHS.Value()
 		wg.Wait()
 		s.sum = lhsVal + rhsVal
 	})
