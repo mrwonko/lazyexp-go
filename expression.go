@@ -4,47 +4,61 @@ import (
 	"sync"
 )
 
-// A Node represents a blocking calculation.
+// A Node represents a blocking calculation. Create one using NewNode().
 //
-// fetch() is private because it is only supposed to be called by this package, so use NewNode() to create a Node.
-//
-// While it might be convenient to also have a Fetch() function, that would encourage sequential fetching, so use the free Fetch() function instead.
+// You'll probably want to embed a Node in your struct that will contain the result.
 type Node interface {
-	fetch()
+	Fetch()
+	noUserImplementations()
 }
 
-// NewNode returns a Node backed by the given function. The function must not be nil.
-func NewNode(fetch func()) Node {
+// Dependencies are Nodes that must be Fetched before the given one can be.
+type Dependencies []Node
+
+// NewNode returns a Node backed by the given function.
+//
+// The fetch function must not be nil, unless you never intend to Fetch() this Node.
+//
+// The dependencies are Nodes that must be fetched before this one can be fetched. They will be fetched in parallel before fetch() is called and must not contain nil.
+func NewNode(dependencies []Node, fetch func()) Node {
+	// TODO: fetch func(context.Context) error - think about recoverable errors in particular
 	return &node{
-		fetcher: fetch,
+		fetcher:      fetch,
+		dependencies: dependencies,
 	}
-}
-
-// Fetch will concurrently fetch the given Nodes. They must not be nil.
-func Fetch(head Node, tail ...Node) {
-	if len(tail) == 0 {
-		head.fetch()
-		return
-	}
-	var wg sync.WaitGroup
-	wg.Add(len(tail))
-	for i := range tail {
-		go func(i int) {
-			tail[i].fetch()
-			wg.Done()
-		}(i)
-	}
-	head.fetch()
-	wg.Wait()
 }
 
 type node struct {
-	fetcher func()
-	once    sync.Once
+	fetcher      func()
+	dependencies []Node
+	once         sync.Once
 }
 
 var _ Node = (*node)(nil)
 
-func (n *node) fetch() {
-	n.once.Do(n.fetcher)
+func (n *node) Fetch() {
+	n.once.Do(func() {
+		// fetch dependencies in parallel
+		if l := len(n.dependencies); l > 0 {
+			if l == 1 {
+				// no need to fetch single dependency in parallel
+				n.dependencies[0].Fetch()
+			} else {
+				// we can save one goroutine by fetching that dependency on the current one
+				var wg sync.WaitGroup
+				wg.Add(l - 1)
+				for i := 1; i < l; i++ {
+					go func(i int) {
+						n.dependencies[i].Fetch()
+						wg.Done()
+					}(i)
+				}
+				n.dependencies[0].Fetch()
+				wg.Wait()
+			}
+		}
+		n.fetcher()
+	})
 }
+
+func (n *node) noUserImplementations() {}
