@@ -7,7 +7,7 @@ import (
 )
 
 type ConstNode struct {
-	lazyexp.Fetcher
+	lazyexp.Node
 	value int
 }
 
@@ -15,7 +15,7 @@ func NewConstNode(fetch func() int) *ConstNode {
 	// we need this set-Fetcher-later idiom because we need a pointer into the object we're creating
 	// (what we really want is to override a private virtual member function)
 	res := &ConstNode{}
-	res.Fetcher = lazyexp.FuncFetcher(func() {
+	res.Node = lazyexp.NewNode(func() {
 		res.value = fetch()
 	})
 	return res
@@ -27,13 +27,13 @@ func (c *ConstNode) Value() int {
 }
 
 type SumNode struct {
-	lazyexp.Fetcher
+	lazyexp.Node
 	sum int
 }
 
 func NewSumNode(lhs, rhs *ConstNode) *SumNode {
 	res := &SumNode{}
-	res.Fetcher = lazyexp.FuncFetcher(func() {
+	res.Node = lazyexp.NewNode(func() {
 		lazyexp.Fetch(lhs, rhs)
 		res.sum = lhs.Value() + rhs.Value()
 	})
