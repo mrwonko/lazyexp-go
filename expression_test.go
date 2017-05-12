@@ -1,59 +1,58 @@
-package lazyexp
+package lazyexp_test
 
 import (
-	"sync"
 	"testing"
+
+	"github.com/mrwonko/lazyexp-go"
 )
 
 type ConstNode struct {
-	FetchValue func() int
-	value      int
-	once       sync.Once
+	lazyexp.Fetcher
+	value int
 }
 
-func (c *ConstNode) Fetch() {
-	c.once.Do(func() {
-		c.value = c.FetchValue()
+func NewConstNode(fetch func() int) *ConstNode {
+	// we need this set-Fetcher-later idiom because we need a pointer into the object we're creating
+	// (what we really want is to override a private virtual member function)
+	res := &ConstNode{}
+	res.Fetcher = lazyexp.FuncFetcher(func() {
+		res.value = fetch()
 	})
+	return res
 }
 
 func (c *ConstNode) Value() int {
-	// could c.Fetch() here to be safe, but we know what we're doing
+	// could Fetch(c) here to be safe, but we know what we're doing
 	return c.value
 }
 
 type SumNode struct {
-	LHS  *ConstNode // must be pointers as we want to share nodes
-	RHS  *ConstNode
-	sum  int
-	once sync.Once
+	lazyexp.Fetcher
+	sum int
 }
 
-func (s *SumNode) Fetch() {
-	s.once.Do(func() {
-		Fetch(s.LHS, s.RHS)
-		s.sum = s.LHS.Value() + s.RHS.Value()
+func NewSumNode(lhs, rhs *ConstNode) *SumNode {
+	res := &SumNode{}
+	res.Fetcher = lazyexp.FuncFetcher(func() {
+		lazyexp.Fetch(lhs, rhs)
+		res.sum = lhs.Value() + rhs.Value()
 	})
+	return res
 }
 
 func (s *SumNode) Value() int {
-	// could c.Fetch() here to be safe, but we know what we're doing
+	// could Fetch(s) here to be safe, but we know what we're doing
 	return s.sum
 }
 
 func TestShouldFetchLazilyOnce(t *testing.T) {
 	oneFetchCount := 0
-	one := ConstNode{
-		FetchValue: func() int {
-			oneFetchCount++
-			return 1
-		},
-	}
-	sum := SumNode{
-		LHS: &one,
-		RHS: &one,
-	}
-	sum.Fetch()
+	one := NewConstNode(func() int {
+		oneFetchCount++
+		return 1
+	})
+	sum := NewSumNode(one, one)
+	lazyexp.Fetch(sum)
 	if oneFetchCount != 1 {
 		t.Errorf("expected 1 fetch after fetching sum initially, got %d", oneFetchCount)
 	}
@@ -63,7 +62,7 @@ func TestShouldFetchLazilyOnce(t *testing.T) {
 	if oneFetchCount != 1 {
 		t.Errorf("expected 1 fetch after getting sum initially, got %d", oneFetchCount)
 	}
-	sum.Fetch()
+	lazyexp.Fetch(sum)
 	if oneFetchCount != 1 {
 		t.Errorf("still expected 1 fetch after fetching sum again, got %d", oneFetchCount)
 	}
@@ -81,24 +80,19 @@ func TestShouldFetchInParallel(t *testing.T) {
 		make(chan struct{}, 1),
 		make(chan struct{}, 1),
 	}
-	leafs := [2]ConstNode{}
+	leafs := [2]*ConstNode{}
 	for i := range leafs {
 		j := i
-		leafs[i] = ConstNode{
-			FetchValue: func() int {
-				close(fetchStarted[j])
-				// wait for other node to be fetched
-				<-fetchStarted[1-j]
-				return j
-			},
-		}
+		leafs[i] = NewConstNode(func() int {
+			close(fetchStarted[j])
+			// wait for other node to be fetched
+			<-fetchStarted[1-j]
+			return j
+		})
 	}
-	root := SumNode{
-		LHS: &leafs[0],
-		RHS: &leafs[1],
-	}
+	root := NewSumNode(leafs[0], leafs[1])
 	// this will block indefinitely if the values are fetched sequentially
-	root.Fetch()
+	lazyexp.Fetch(root)
 	if got := root.Value(); got != 1 {
 		t.Errorf("expected 0+1=1, got %d", got)
 	}
