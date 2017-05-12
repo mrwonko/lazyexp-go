@@ -11,10 +11,14 @@ type ConstNode struct {
 	once       sync.Once
 }
 
-func (c *ConstNode) Value() int {
+func (c *ConstNode) Fetch() {
 	c.once.Do(func() {
 		c.value = c.FetchValue()
 	})
+}
+
+func (c *ConstNode) Value() int {
+	// could c.Fetch() here to be safe, but we know what we're doing
 	return c.value
 }
 
@@ -25,19 +29,15 @@ type SumNode struct {
 	once sync.Once
 }
 
-func (s *SumNode) Value() int {
+func (s *SumNode) Fetch() {
 	s.once.Do(func() {
-		var lhsVal, rhsVal int
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			lhsVal = s.LHS.Value()
-			wg.Done()
-		}()
-		rhsVal = s.RHS.Value()
-		wg.Wait()
-		s.sum = lhsVal + rhsVal
+		Fetch(s.LHS, s.RHS)
+		s.sum = s.LHS.Value() + s.RHS.Value()
 	})
+}
+
+func (s *SumNode) Value() int {
+	// could c.Fetch() here to be safe, but we know what we're doing
 	return s.sum
 }
 
@@ -53,11 +53,19 @@ func TestShouldFetchLazilyOnce(t *testing.T) {
 		LHS: &one,
 		RHS: &one,
 	}
+	sum.Fetch()
+	if oneFetchCount != 1 {
+		t.Errorf("expected 1 fetch after fetching sum initially, got %d", oneFetchCount)
+	}
 	if got := sum.Value(); got != 2 {
 		t.Errorf("expected 1+1=2, got %d", got)
 	}
 	if oneFetchCount != 1 {
 		t.Errorf("expected 1 fetch after getting sum initially, got %d", oneFetchCount)
+	}
+	sum.Fetch()
+	if oneFetchCount != 1 {
+		t.Errorf("still expected 1 fetch after fetching sum again, got %d", oneFetchCount)
 	}
 	if got := sum.Value(); got != 2 {
 		t.Errorf("still expected 1+1=2, got %d", got)
@@ -90,6 +98,7 @@ func TestShouldFetchInParallel(t *testing.T) {
 		RHS: &leafs[1],
 	}
 	// this will block indefinitely if the values are fetched sequentially
+	root.Fetch()
 	if got := root.Value(); got != 1 {
 		t.Errorf("expected 0+1=1, got %d", got)
 	}
