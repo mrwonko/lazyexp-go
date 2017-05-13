@@ -31,7 +31,7 @@ func ContinueOnError(node Node) Dependency {
 	}
 }
 
-// CancelOnError returns a Dependency where any Node Fetch() error causes sibling Dependencies' Fetches to be canceled.
+// CancelOnError returns a Dependency where any Node Fetch() error causes sibling Dependencies' Fetches to be canceled, but still continues with the fetch function.
 func CancelOnError(node Node) Dependency {
 	return Dependency{
 		node:         node,
@@ -39,7 +39,7 @@ func CancelOnError(node Node) Dependency {
 	}
 }
 
-// CancelOnCompletion returns a Dependency that upon Node Fetch() completion causes sibling Dependencies' Fetches to be canceled.
+// CancelOnCompletion returns a Dependency that upon Node Fetch() completion causes sibling Dependencies' Fetches to be canceled, but still continues with the fetch function.
 func CancelOnCompletion(node Node) Dependency {
 	return Dependency{
 		node:         node,
