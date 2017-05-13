@@ -3,6 +3,7 @@ package lazyexp
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // A Node represents a blocking calculation. Create one using NewNode().
@@ -12,6 +13,7 @@ type Node interface {
 	Fetch(context.Context) error
 	// FetchStrict never cancels siblings on error and can be useful for debugging, but should generally be avoided.
 	FetchStrict(context.Context) error
+	fetched() bool
 	noUserImplementations()
 }
 
@@ -66,6 +68,10 @@ type Dependencies []Dependency
 //
 // The dependencies will be fetched in parallel before fetch() is called and must not contain zero values. Don't introduce circular dependencies or the Fetch will deadlock waiting for itself to finish.
 func NewNode(dependencies Dependencies, fetch func(context.Context, []error) error) Node {
+	return newNode(dependencies, fetch)
+}
+
+func newNode(dependencies Dependencies, fetch func(context.Context, []error) error) *node {
 	return &node{
 		fetcher:      fetch,
 		dependencies: dependencies,
@@ -77,15 +83,12 @@ type node struct {
 	dependencies Dependencies
 	once         sync.Once
 	err          error
+	iFetched     int32
 }
 
-func (n *node) Fetch(ctx context.Context) error {
-	return n.fetch(ctx, false)
-}
+func (n *node) Fetch(ctx context.Context) error { return n.fetch(ctx, false) }
 
-func (n *node) FetchStrict(ctx context.Context) error {
-	return n.fetch(ctx, true)
-}
+func (n *node) FetchStrict(ctx context.Context) error { return n.fetch(ctx, true) }
 
 func (n *node) fetch(ctx context.Context, strict bool) error {
 	n.once.Do(func() {
@@ -100,6 +103,7 @@ func (n *node) fetch(ctx context.Context, strict bool) error {
 				case onErrorAbort:
 					if err != nil {
 						n.err = err
+						atomic.StoreInt32(&n.iFetched, 1)
 						return
 					}
 				case onErrorCancel:
@@ -120,23 +124,35 @@ func (n *node) fetch(ctx context.Context, strict bool) error {
 				}
 				wg.Add(l - 1)
 				for i := 1; i < l; i++ {
-					go func(i int) {
+					// save spawning a goroutine for fully fetched nodes
+					if n.dependencies[i].node.fetched() {
 						errs[i] = fetchDependency(subCtx, cancel, n.dependencies[i], &n.err, &mu)
 						wg.Done()
-					}(i)
+					} else {
+						go func(i int) {
+							errs[i] = fetchDependency(subCtx, cancel, n.dependencies[i], &n.err, &mu)
+							wg.Done()
+						}(i)
+					}
 				}
 				errs[0] = fetchDependency(subCtx, cancel, n.dependencies[0], &n.err, &mu)
 				wg.Wait()
 				cancel()
 				if n.err != nil {
+					atomic.StoreInt32(&n.iFetched, 1)
 					return
 				}
 			}
 
 		}
 		n.err = n.fetcher(ctx, errs)
+		atomic.StoreInt32(&n.iFetched, 1)
 	})
 	return n.err
+}
+
+func (n *node) fetched() bool {
+	return atomic.LoadInt32(&n.iFetched) != 0
 }
 
 func (n *node) noUserImplementations() {}
