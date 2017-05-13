@@ -2,6 +2,8 @@ package lazyexp_test
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/mrwonko/lazyexp-go"
@@ -102,4 +104,58 @@ func TestShouldFetchInParallel(t *testing.T) {
 	}
 }
 
-// TODO: extensively test canceling, fatal errors etc.
+func TestShouldPropagateAcceptableErrors(t *testing.T) {
+	var (
+		err1     = errors.New("error 1")
+		err2     = errors.New("error 2")
+		err3     = errors.New("error 3")
+		errNode1 = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
+		errNode2 = lazyexp.NewNode(nil, func(context.Context, []error) error { return err2 })
+	)
+	t.Run("single", func(t *testing.T) {
+		var (
+			checked = false
+			check   = lazyexp.NewNode(
+				lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1)},
+				func(_ context.Context, errs []error) error {
+					expected := []error{err1}
+					if !reflect.DeepEqual(errs, expected) {
+						t.Errorf("expected errors %v, got %v", expected, errs)
+					}
+					checked = true
+					return err3
+				},
+			)
+			err = check.Fetch(context.Background())
+		)
+		if err != err3 {
+			t.Errorf("expected single fetch to return %v, got %v", err3, err)
+		}
+		if !checked {
+			t.Errorf("expected single fetch function to be called")
+		}
+	})
+	t.Run("multi", func(t *testing.T) {
+		var (
+			checked = false
+			check   = lazyexp.NewNode(
+				lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1), lazyexp.ContinueOnError(errNode2)},
+				func(_ context.Context, errs []error) error {
+					expected := []error{err1, err2}
+					if !reflect.DeepEqual(errs, expected) {
+						t.Errorf("expected errors %v, got %v", expected, errs)
+					}
+					checked = true
+					return err3
+				},
+			)
+			err = check.Fetch(context.Background())
+		)
+		if err != err3 {
+			t.Errorf("expected multi fetch to return %v, got %v", err3, err)
+		}
+		if !checked {
+			t.Errorf("expected multi fetch function to be called")
+		}
+	})
+}
