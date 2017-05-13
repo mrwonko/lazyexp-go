@@ -63,7 +63,7 @@ type Dependencies []Dependency
 //
 // The fetch function must not be nil, unless you never intend to Fetch() this Node. It will be called with the errors from the optional dependencies, unless they are fatal, or context.Canceled if they returned CancelFetchSuccess().
 //
-// The dependencies will be fetched in parallel before fetch() is called and must not contain zero values.
+// The dependencies will be fetched in parallel before fetch() is called and must not contain zero values. Don't introduce circular dependencies or the Fetch will deadlock waiting for itself to finish.
 func NewNode(dependencies Dependencies, fetch func(context.Context, []error) error) Node {
 	return &node{
 		fetcher:      fetch,
