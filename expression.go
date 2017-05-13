@@ -10,6 +10,8 @@ import (
 // You'll probably want to embed a Node in your struct that will contain the result.
 type Node interface {
 	Fetch(context.Context) error
+	// FetchStrict never cancels siblings on error and can be useful for debugging, but should generally be avoided.
+	FetchStrict(context.Context) error
 	noUserImplementations()
 }
 
@@ -78,6 +80,14 @@ type node struct {
 }
 
 func (n *node) Fetch(ctx context.Context) error {
+	return n.fetch(ctx, false)
+}
+
+func (n *node) FetchStrict(ctx context.Context) error {
+	return n.fetch(ctx, true)
+}
+
+func (n *node) fetch(ctx context.Context, strict bool) error {
 	n.once.Do(func() {
 		var errs []error
 		// fetch dependencies in parallel
@@ -104,7 +114,10 @@ func (n *node) Fetch(ctx context.Context) error {
 				// we can save one goroutine by fetching that dependency on the current one
 				var wg sync.WaitGroup
 				var mu sync.Mutex
-				subCtx, cancel := context.WithCancel(ctx)
+				subCtx, cancel := ctx, func() {}
+				if !strict {
+					subCtx, cancel = context.WithCancel(ctx)
+				}
 				wg.Add(l - 1)
 				for i := 1; i < l; i++ {
 					go func(i int) {

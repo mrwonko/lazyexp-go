@@ -257,3 +257,33 @@ func TestAbortOnError(t *testing.T) {
 		}
 	})
 }
+
+func TestFetchStrict(t *testing.T) {
+	var (
+		done        = make(chan struct{})
+		err1        = errors.New("error 1")
+		errNode     = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
+		siblingNode = lazyexp.NewNode(nil, func(ctx context.Context, _ []error) error {
+			go func() {
+				select {
+				case <-ctx.Done():
+					t.Errorf("did not expect sibling to get canceled in strict mode")
+				case <-done:
+				}
+			}()
+			return nil
+		})
+		check = lazyexp.NewNode(
+			lazyexp.Dependencies{lazyexp.AbortOnError(errNode), lazyexp.ContinueOnError(siblingNode)},
+			func(context.Context, []error) error {
+				t.Errorf("did not expect fetch to get called")
+				return errors.New("wat")
+			},
+		)
+		err = check.FetchStrict(context.Background())
+	)
+	done <- struct{}{}
+	if err != err1 {
+		t.Errorf("expected %v, got %v", err1, err)
+	}
+}
