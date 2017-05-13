@@ -3,7 +3,6 @@ package lazyexp
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 )
 
 // A Node represents a blocking calculation. Create one using NewNode().
@@ -104,20 +103,19 @@ func (n *node) Fetch(ctx context.Context) error {
 			} else {
 				// we can save one goroutine by fetching that dependency on the current one
 				var wg sync.WaitGroup
-				var fatalErr atomic.Value
+				var mu sync.Mutex
 				subCtx, cancel := context.WithCancel(ctx)
 				wg.Add(l - 1)
 				for i := 1; i < l; i++ {
 					go func(i int) {
-						errs[i] = fetchDependency(subCtx, cancel, n.dependencies[i], &fatalErr)
+						errs[i] = fetchDependency(subCtx, cancel, n.dependencies[i], &n.err, &mu)
 						wg.Done()
 					}(i)
 				}
-				errs[0] = fetchDependency(subCtx, cancel, n.dependencies[0], &fatalErr)
+				errs[0] = fetchDependency(subCtx, cancel, n.dependencies[0], &n.err, &mu)
 				wg.Wait()
 				cancel()
-				if iErr := fatalErr.Load(); iErr != nil {
-					n.err = iErr.(error)
+				if n.err != nil {
 					return
 				}
 			}
@@ -130,7 +128,7 @@ func (n *node) Fetch(ctx context.Context) error {
 
 func (n *node) noUserImplementations() {}
 
-func fetchDependency(ctx context.Context, cancel func(), dependency Dependency, outFatalErr *atomic.Value) error {
+func fetchDependency(ctx context.Context, cancel func(), dependency Dependency, outFatalErr *error, mu *sync.Mutex) error {
 	err := dependency.node.Fetch(ctx)
 	switch dependency.onCompletion {
 	case onErrorCancel:
@@ -142,8 +140,13 @@ func fetchDependency(ctx context.Context, cancel func(), dependency Dependency, 
 		cancel()
 	case onErrorAbort:
 		if err != nil {
+			// only store first error, otherwise we'd likely get context.Canceled
+			mu.Lock()
+			if *outFatalErr == nil {
+				*outFatalErr = err
+			}
+			mu.Unlock()
 			cancel()
-			outFatalErr.Store(err)
 		}
 	case onErrorContinue:
 	}
