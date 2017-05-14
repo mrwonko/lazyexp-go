@@ -18,6 +18,7 @@ type metaNode struct {
 	fetcher      func(context.Context, []error) (Node, error)
 	dependencies Dependencies
 	once         sync.Once
+	fetcherNode  *node
 	result       Node
 	err          error
 	iFetched     int32
@@ -29,11 +30,12 @@ func (m *metaNode) FetchStrict(ctx context.Context) error { return m.fetch(ctx, 
 
 func (m *metaNode) fetch(ctx context.Context, strict bool) error {
 	m.once.Do(func() {
-		m.err = newNode(m.dependencies, func(subCtx context.Context, errs []error) error {
+		m.fetcherNode = newNode(m.dependencies, func(subCtx context.Context, errs []error) error {
 			var err error
 			m.result, err = m.fetcher(subCtx, errs)
 			return err
-		}).fetch(ctx, strict)
+		})
+		m.err = m.fetcherNode.fetch(ctx, strict)
 		if m.err == nil {
 			m.err = m.result.Fetch(ctx)
 		}

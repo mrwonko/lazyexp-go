@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // A Node represents a blocking calculation. Create one using NewNode().
@@ -84,6 +85,7 @@ type node struct {
 	once         sync.Once
 	err          error
 	iFetched     int32
+	start, end   time.Time
 }
 
 func (n *node) Fetch(ctx context.Context) error { return n.fetch(ctx, false) }
@@ -145,7 +147,9 @@ func (n *node) fetch(ctx context.Context, strict bool) error {
 			}
 
 		}
+		n.start = time.Now()
 		n.err = n.fetcher(ctx, errs)
+		n.end = time.Now()
 		atomic.StoreInt32(&n.iFetched, 1)
 	})
 	return n.err
