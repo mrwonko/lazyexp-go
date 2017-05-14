@@ -66,20 +66,16 @@ func (c *NodeCache) User(id int) *UserNode {
 		return user
 	}
 	user := &UserNode{}
-	var dbEntry DBUser
-	user.Node = lazyexp.NewNode(nil, func(context.Context, []error) error {
-		var ok bool
-		dbEntry, ok = c.database.Users[id]
+	user.Node = lazyexp.NewMetaNode(nil, func(context.Context, []error) (lazyexp.Node, error) {
+		userInfo, ok := c.database.Users[id]
 		if !ok {
-			return errNotFound
+			return nil, errNotFound
 		}
-		user.Name = dbEntry.Name
-		return nil
-	}).OnSuccess(func(ctx context.Context) (lazyexp.Node, error) {
+		user.Name = userInfo.Name
 		// fetch articles referenced in wish list
-		articles := make([]*ArticleNode, len(dbEntry.WishList))
-		deps := make(lazyexp.Dependencies, len(dbEntry.WishList))
-		for i, id := range dbEntry.WishList {
+		articles := make([]*ArticleNode, len(userInfo.WishList))
+		deps := make(lazyexp.Dependencies, len(userInfo.WishList))
+		for i, id := range userInfo.WishList {
 			article := c.Article(id)
 			articles[i] = article
 			deps[i] = lazyexp.ContinueOnError(article)
