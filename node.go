@@ -13,6 +13,8 @@ type Node interface {
 	Fetch(context.Context) error
 	// FetchStrict never cancels siblings on error and can be useful for debugging, but should generally be avoided.
 	FetchStrict(context.Context) error
+	Then(func(context.Context, error) (Node, error)) Node
+	OnSuccess(func(context.Context) (Node, error)) Node
 	fetched() bool
 	noUserImplementations()
 }
@@ -89,6 +91,18 @@ type node struct {
 func (n *node) Fetch(ctx context.Context) error { return n.fetch(ctx, false) }
 
 func (n *node) FetchStrict(ctx context.Context) error { return n.fetch(ctx, true) }
+
+func (n *node) Then(continuation func(context.Context, error) (Node, error)) Node {
+	return NewMetaNode(Dependencies{ContinueOnError(n)}, func(ctx context.Context, errs []error) (Node, error) {
+		return continuation(ctx, errs[0])
+	})
+}
+
+func (n *node) OnSuccess(continuation func(context.Context) (Node, error)) Node {
+	return NewMetaNode(Dependencies{AbortOnError(n)}, func(ctx context.Context, _ []error) (Node, error) {
+		return continuation(ctx)
+	})
+}
 
 func (n *node) fetch(ctx context.Context, strict bool) error {
 	n.once.Do(func() {

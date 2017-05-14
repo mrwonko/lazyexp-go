@@ -27,6 +27,18 @@ func (m *metaNode) Fetch(ctx context.Context) error { return m.fetch(ctx, false)
 
 func (m *metaNode) FetchStrict(ctx context.Context) error { return m.fetch(ctx, true) }
 
+func (m *metaNode) Then(continuation func(context.Context, error) (Node, error)) Node {
+	return NewMetaNode(Dependencies{ContinueOnError(m)}, func(ctx context.Context, errs []error) (Node, error) {
+		return continuation(ctx, errs[0])
+	})
+}
+
+func (m *metaNode) OnSuccess(continuation func(context.Context) (Node, error)) Node {
+	return NewMetaNode(Dependencies{AbortOnError(m)}, func(ctx context.Context, _ []error) (Node, error) {
+		return continuation(ctx)
+	})
+}
+
 func (m *metaNode) fetch(ctx context.Context, strict bool) error {
 	m.once.Do(func() {
 		m.err = newNode(m.dependencies, func(subCtx context.Context, errs []error) error {
