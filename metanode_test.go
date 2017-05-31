@@ -141,9 +141,9 @@ func TestMetaNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, expected := willi.String(), "Willi: Bloodborne, Effective Modern C++"; got != expected {
-		t.Errorf("Expected user 0 to be %s, got %s", expected, got)
+		t.Errorf("Expected user 0 to be %#v, got %#v", expected, got)
 	}
 	if got, expected := moritz.String(), "Moritz: PlayStation, Bloodborne"; got != expected {
-		t.Errorf("Expected user 1 to be %s, got %s", expected, got)
+		t.Errorf("Expected user 1 to be %#v, got %#v", expected, got)
 	}
 }
