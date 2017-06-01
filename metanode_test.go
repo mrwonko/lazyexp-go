@@ -2,7 +2,6 @@ package lazyexp_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -66,7 +65,7 @@ func (c *NodeCache) User(id int) *UserNode {
 		return user
 	}
 	user := &UserNode{}
-	user.Node = lazyexp.NewMetaNode(nil, func(context.Context, []error) (lazyexp.Node, error) {
+	user.Node = lazyexp.NewMetaNode(nil, func([]error) (lazyexp.Node, error) {
 		userInfo, ok := c.database.Users[id]
 		if !ok {
 			return nil, errNotFound
@@ -80,7 +79,7 @@ func (c *NodeCache) User(id int) *UserNode {
 			articles[i] = article
 			deps[i] = lazyexp.ContinueOnError(article)
 		}
-		return lazyexp.NewNode(deps, func(_ context.Context, errs []error) error {
+		return lazyexp.NewNode(deps, func(errs []error) error {
 			// only keep found articles
 			for i, err := range errs {
 				if err == nil {
@@ -101,7 +100,7 @@ func (c *NodeCache) Article(id int) *ArticleNode {
 		return article
 	}
 	article := &ArticleNode{}
-	article.Node = lazyexp.NewNode(nil, func(context.Context, []error) error {
+	article.Node = lazyexp.NewNode(nil, func([]error) error {
 		articleInfo, ok := c.database.Articles[id]
 		if !ok {
 			return errNotFound
@@ -135,8 +134,8 @@ func TestMetaNode(t *testing.T) {
 	)
 	err := lazyexp.NewNode(
 		lazyexp.Dependencies{lazyexp.AbortOnError(willi), lazyexp.AbortOnError(moritz)},
-		func(context.Context, []error) error { return nil },
-	).Fetch(context.Background())
+		func([]error) error { return nil },
+	).Fetch()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,9 +11,9 @@ import (
 //
 // You'll probably want to embed a Node in your struct that will contain the result.
 type Node interface {
-	Fetch(context.Context) error
+	Fetch() error
 	// FetchStrict never cancels siblings on error and can be useful for debugging, but should generally be avoided.
-	FetchStrict(context.Context) error
+	FetchStrict() error
 	fetched() bool
 	noUserImplementations()
 }
@@ -81,11 +81,11 @@ type Dependencies []Dependency
 // The fetch function must not be nil, unless you never intend to Fetch() this Node. It will be called with the errors from the optional dependencies, unless they are fatal, or context.Canceled if they returned CancelFetchSuccess().
 //
 // The dependencies will be fetched in parallel before fetch() is called and must not contain zero values. Don't introduce circular dependencies or the Fetch will deadlock waiting for itself to finish.
-func NewNode(dependencies Dependencies, fetch func(context.Context, []error) error) Node {
+func NewNode(dependencies Dependencies, fetch func([]error) error) Node {
 	return newNode(dependencies, fetch)
 }
 
-func newNode(dependencies Dependencies, fetch func(context.Context, []error) error) *node {
+func newNode(dependencies Dependencies, fetch func([]error) error) *node {
 	return &node{
 		fetcher:      fetch,
 		dependencies: dependencies,
@@ -94,7 +94,7 @@ func newNode(dependencies Dependencies, fetch func(context.Context, []error) err
 }
 
 type node struct {
-	fetcher      func(context.Context, []error) error
+	fetcher      func([]error) error
 	dependencies Dependencies
 	once         sync.Once
 	err          error
@@ -103,9 +103,9 @@ type node struct {
 	start, end   time.Time
 }
 
-func (n *node) Fetch(ctx context.Context) error { return n.fetch(ctx, false) }
+func (n *node) Fetch() error { return n.fetch(false) }
 
-func (n *node) FetchStrict(ctx context.Context) error { return n.fetch(ctx, true) }
+func (n *node) FetchStrict() error { return n.fetch(true) }
 
 func (n *node) complete(err error) {
 	n.err = err
@@ -113,17 +113,17 @@ func (n *node) complete(err error) {
 	close(n.fetchedChan)
 }
 
-func (n *node) fetch(ctx context.Context, strict bool) error {
+func (n *node) fetch(strict bool) error {
 	n.once.Do(func() {
 
-		data := precheckDependencies(ctx, n.dependencies)
+		data := precheckDependencies(n.dependencies)
 		if data.abort && !strict {
 			n.complete(data.abortErr)
 			return
 		}
-		fetch := func(dep dependencyIndex) error { return dep.node.Fetch(ctx) }
+		fetch := func(dep dependencyIndex) error { return dep.node.Fetch() }
 		if strict {
-			fetch = func(dep dependencyIndex) error { return dep.node.FetchStrict(ctx) }
+			fetch = func(dep dependencyIndex) error { return dep.node.FetchStrict() }
 			// in strict mode, nothing cancels
 			data.nonCancelingDependencies = append(data.nonCancelingDependencies, data.cancelingDependencies...)
 			data.cancelingDependencies = nil
@@ -150,7 +150,7 @@ func (n *node) fetch(ctx context.Context, strict bool) error {
 		} else {
 			// fetch this node
 			n.start = time.Now()
-			err := n.fetcher(ctx, data.errs)
+			err := n.fetcher(data.errs)
 			n.end = time.Now()
 			n.complete(err)
 		}
@@ -158,7 +158,7 @@ func (n *node) fetch(ctx context.Context, strict bool) error {
 	return n.err
 }
 
-func precheckDependencies(ctx context.Context, dependencies Dependencies) (result struct {
+func precheckDependencies(dependencies Dependencies) (result struct {
 	cancelingDependencies    []dependencyIndex
 	nonCancelingDependencies []dependencyIndex
 	errs                     []error // result of fetching the dependencies
@@ -173,7 +173,7 @@ func precheckDependencies(ctx context.Context, dependencies Dependencies) (resul
 	for i, dep := range dependencies {
 		if dep.node.fetched() {
 			// but dependencies that are already fetched may cause cancellation/abortion
-			result.errs[i] = dep.node.Fetch(ctx)
+			result.errs[i] = dep.node.Fetch()
 			if dep.onCompletion.Cancel() && dep.onCompletion.Match(result.errs[i]) {
 				result.cancel = true
 			} else if dep.onCompletion.Abort() && dep.onCompletion.Match(result.errs[i]) {

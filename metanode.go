@@ -1,13 +1,12 @@
 package lazyexp
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 )
 
 // NewMetaNode creates a new node that itself yields nodes that are fetched when it is fetched.
-func NewMetaNode(dependencies Dependencies, fetch func(context.Context, []error) (Node, error)) Node {
+func NewMetaNode(dependencies Dependencies, fetch func([]error) (Node, error)) Node {
 	return &metaNode{
 		fetcher:      fetch,
 		dependencies: dependencies,
@@ -15,7 +14,7 @@ func NewMetaNode(dependencies Dependencies, fetch func(context.Context, []error)
 }
 
 type metaNode struct {
-	fetcher      func(context.Context, []error) (Node, error)
+	fetcher      func([]error) (Node, error)
 	dependencies Dependencies
 	once         sync.Once
 	fetcherNode  *node
@@ -24,20 +23,20 @@ type metaNode struct {
 	iFetched     int32
 }
 
-func (m *metaNode) Fetch(ctx context.Context) error { return m.fetch(ctx, false) }
+func (m *metaNode) Fetch() error { return m.fetch(false) }
 
-func (m *metaNode) FetchStrict(ctx context.Context) error { return m.fetch(ctx, true) }
+func (m *metaNode) FetchStrict() error { return m.fetch(true) }
 
-func (m *metaNode) fetch(ctx context.Context, strict bool) error {
+func (m *metaNode) fetch(strict bool) error {
 	m.once.Do(func() {
-		m.fetcherNode = newNode(m.dependencies, func(subCtx context.Context, errs []error) error {
+		m.fetcherNode = newNode(m.dependencies, func(errs []error) error {
 			var err error
-			m.result, err = m.fetcher(subCtx, errs)
+			m.result, err = m.fetcher(errs)
 			return err
 		})
-		m.err = m.fetcherNode.fetch(ctx, strict)
+		m.err = m.fetcherNode.fetch(strict)
 		if m.err == nil {
-			m.err = m.result.Fetch(ctx)
+			m.err = m.result.Fetch()
 		}
 		atomic.StoreInt32(&m.iFetched, 1)
 	})

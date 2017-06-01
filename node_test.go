@@ -18,7 +18,7 @@ func NewConstNode(fetch func() int) *ConstNode {
 	// we need this set-Fetcher-later idiom because we need a pointer into the object we're creating
 	// (what we really want is to override a private virtual member function)
 	res := &ConstNode{}
-	res.Node = lazyexp.NewNode(nil, func(context.Context, []error) error {
+	res.Node = lazyexp.NewNode(nil, func([]error) error {
 		res.value = fetch()
 		return nil
 	})
@@ -39,7 +39,7 @@ func NewSumNode(lhs, rhs *ConstNode) *SumNode {
 	res := &SumNode{}
 	res.Node = lazyexp.NewNode(
 		lazyexp.Dependencies{lazyexp.AbortOnError(lhs), lazyexp.AbortOnError(rhs)},
-		func(context.Context, []error) error {
+		func([]error) error {
 			res.sum = lhs.Value() + rhs.Value()
 			return nil
 		})
@@ -47,7 +47,7 @@ func NewSumNode(lhs, rhs *ConstNode) *SumNode {
 }
 
 func (s *SumNode) Value() int {
-	// could Fetch(s) here to be safe, but we know what we're doing
+	// could Fetch() here to be safe, but we know what we're doing
 	return s.sum
 }
 
@@ -58,7 +58,7 @@ func TestShouldFetchLazilyOnce(t *testing.T) {
 		return 1
 	})
 	sum := NewSumNode(one, one)
-	sum.Fetch(context.Background())
+	sum.Fetch()
 	if oneFetchCount != 1 {
 		t.Errorf("expected 1 fetch after fetching sum initially, got %d", oneFetchCount)
 	}
@@ -68,7 +68,7 @@ func TestShouldFetchLazilyOnce(t *testing.T) {
 	if oneFetchCount != 1 {
 		t.Errorf("expected 1 fetch after getting sum initially, got %d", oneFetchCount)
 	}
-	sum.Fetch(context.Background())
+	sum.Fetch()
 	if oneFetchCount != 1 {
 		t.Errorf("still expected 1 fetch after fetching sum again, got %d", oneFetchCount)
 	}
@@ -98,439 +98,76 @@ func TestShouldFetchInParallel(t *testing.T) {
 	}
 	root := NewSumNode(leafs[0], leafs[1])
 	// this will block indefinitely if the values are fetched sequentially
-	root.Fetch(context.Background())
+	root.Fetch()
 	if got := root.Value(); got != 1 {
 		t.Errorf("expected 0+1=1, got %d", got)
 	}
 }
 
-func TestContinueOnError(t *testing.T) {
-	var (
-		err1     = errors.New("error 1")
-		err2     = errors.New("error 2")
-		err3     = errors.New("error 3")
-		errNode1 = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
-		errNode2 = lazyexp.NewNode(nil, func(context.Context, []error) error { return err2 })
-	)
-	t.Run("single", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{err1}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errors %v, got %v", expected, errs)
-					}
-					checked = true
-					return err3
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err3 {
-			t.Errorf("expected single fetch to return %v, got %v", err3, err)
-		}
-		if !checked {
-			t.Errorf("expected single fetch function to be called")
-		}
-	})
-	t.Run("multi", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1), lazyexp.ContinueOnError(errNode2)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{err1, err2}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errors %v, got %v", expected, errs)
-					}
-					checked = true
-					return err3
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err3 {
-			t.Errorf("expected multi fetch to return %v, got %v", err3, err)
-		}
-		if !checked {
-			t.Errorf("expected multi fetch function to be called")
-		}
-	})
-}
-
-func TestAbortOnError(t *testing.T) {
-	t.Skip("TODO: adjust, as abortion does not cancel any longer")
-	var (
-		err1    = errors.New("error 1")
-		err2    = errors.New("error 3")
-		nilNode = lazyexp.NewNode(nil, func(context.Context, []error) error { return nil })
-	)
-	t.Run("single success", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.AbortOnError(nilNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected fetch to return %v, got %v", err2, err)
-		}
-		if !checked {
-			t.Errorf("expected fetch function to be called")
-		}
-	})
-	t.Run("multi success", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.AbortOnError(nilNode), lazyexp.AbortOnError(nilNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil, nil}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected fetch to return %v, got %v", err2, err)
-		}
-		if !checked {
-			t.Errorf("expected fetch function to be called")
-		}
-	})
-	t.Run("single failure", func(t *testing.T) {
-		var (
-			errNode = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.AbortOnError(errNode)},
-				func(context.Context, []error) error {
-					t.Errorf("expected fetch to not be called")
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err1 {
-			t.Errorf("expected error %v, got %v", err1, err)
-		}
-	})
-	t.Run("canceling failure", func(t *testing.T) {
-		var (
-			errNode    = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
-			canceled   = false
-			cancelNode = lazyexp.NewNode(nil, func(ctx context.Context, _ []error) error {
-				<-ctx.Done()
-				canceled = true
-				if ctx.Err() != context.Canceled {
-					t.Errorf("expected %v error, got %v", context.Canceled, ctx.Err())
-				}
-				return ctx.Err()
-			})
-			check = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.AbortOnError(errNode), lazyexp.AbortOnError(cancelNode)},
-				func(context.Context, []error) error {
-					t.Errorf("expected fetch not to be called")
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err1 {
-			t.Errorf("expected error %v, got %v", err1, err)
-		}
-		if !canceled {
-			t.Errorf("expected sibling to get canceled")
-		}
-	})
-}
-
 func TestCancelOnError(t *testing.T) {
-	t.Skip("TODO: adjust, as cancel does not cancel any longer")
+	// strictly speaking reusing these nodes means the prefetch optimization will take different code paths on later subtests, so their order could matter... but it shouldn't
 	var (
-		nilNode = lazyexp.NewNode(nil, func(context.Context, []error) error { return nil })
-		err1    = errors.New("error 1")
-		err2    = errors.New("error 2")
-		errNode = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
-	)
-	t.Run("single success", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnError(nilNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected fetch to return %v, got %v", err2, err)
-		}
-		if !checked {
-			t.Errorf("expected fetch function to be called")
-		}
-	})
-	t.Run("multi success", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnError(nilNode), lazyexp.CancelOnError(nilNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil, nil}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected fetch to return %v, got %v", err2, err)
-		}
-		if !checked {
-			t.Errorf("expected fetch function to be called")
-		}
-	})
-	t.Run("single failure", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnError(errNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{err1}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected error %v, got %v", err2, err)
-		}
-	})
-	t.Run("multi success", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnError(nilNode), lazyexp.CancelOnError(nilNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil, nil}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected error %v, got %v", err2, err)
-		}
-	})
-	t.Run("canceling failure", func(t *testing.T) {
-		var (
-			checked     = false
-			siblingNode = lazyexp.NewNode(nil, func(ctx context.Context, _ []error) error {
-				<-ctx.Done()
-				return ctx.Err()
-			})
-			check = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnError(errNode), lazyexp.ContinueOnError(siblingNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{err1, context.Canceled}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected error %v, got %v", err2, err)
-		}
-	})
-}
-
-func TestCancelOnCompletion(t *testing.T) {
-	var (
-		nilNode = lazyexp.NewNode(nil, func(context.Context, []error) error { return nil })
-		err1    = errors.New("error 1")
-		err2    = errors.New("error 2")
-		errNode = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
-	)
-	t.Run("single success", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnCompletion(nilNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected fetch to return %v, got %v", err2, err)
-		}
-		if !checked {
-			t.Errorf("expected fetch function to be called")
-		}
-	})
-	t.Run("multi success", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnCompletion(nilNode), lazyexp.CancelOnCompletion(nilNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil, nil}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected fetch to return %v, got %v", err2, err)
-		}
-		if !checked {
-			t.Errorf("expected fetch function to be called")
-		}
-	})
-	t.Run("single failure", func(t *testing.T) {
-		var (
-			checked = false
-			check   = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnCompletion(errNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{err1}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected error %v, got %v", err2, err)
-		}
-	})
-	t.Run("canceling success", func(t *testing.T) {
-		var (
-			checked     = false
-			siblingNode = lazyexp.NewNode(nil, func(ctx context.Context, _ []error) error {
-				<-ctx.Done()
-				return ctx.Err()
-			})
-			check = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnCompletion(nilNode), lazyexp.ContinueOnError(siblingNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{nil, context.Canceled}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected error %v, got %v", err2, err)
-		}
-	})
-	t.Run("canceling failure", func(t *testing.T) {
-		var (
-			checked     = false
-			siblingNode = lazyexp.NewNode(nil, func(ctx context.Context, _ []error) error {
-				<-ctx.Done()
-				return ctx.Err()
-			})
-			check = lazyexp.NewNode(
-				lazyexp.Dependencies{lazyexp.CancelOnCompletion(errNode), lazyexp.ContinueOnError(siblingNode)},
-				func(_ context.Context, errs []error) error {
-					expected := []error{err1, context.Canceled}
-					if !reflect.DeepEqual(errs, expected) {
-						t.Errorf("expected errs %v, got %v", expected, errs)
-					}
-					checked = true
-					return err2
-				},
-			)
-			err = check.Fetch(context.Background())
-		)
-		if err != err2 {
-			t.Errorf("expected error %v, got %v", err2, err)
-		}
-	})
-}
-
-func TestFetchStrict(t *testing.T) {
-	t.Skip("TODO: adjust to new cancellation logic")
-	var (
-		done        = make(chan struct{})
-		err1        = errors.New("error 1")
-		errNode     = lazyexp.NewNode(nil, func(context.Context, []error) error { return err1 })
-		siblingNode = lazyexp.NewNode(nil, func(ctx context.Context, _ []error) error {
-			go func() {
-				select {
-				case <-ctx.Done():
-					t.Errorf("did not expect sibling to get canceled in strict mode")
-				case <-done:
-				}
-			}()
-			return nil
+		nilNode      = lazyexp.NewNode(nil, func([]error) error { return nil })
+		err1         = errors.New("child error 1")
+		err2         = errors.New("child error 2")
+		fetchErr     = errors.New("root fetch failure")
+		errNode1     = lazyexp.NewNode(nil, func([]error) error { return err1 })
+		errNode2     = lazyexp.NewNode(nil, func([]error) error { return err2 })
+		ctx, cancel  = context.WithCancel(context.Background())
+		noreturnNode = lazyexp.NewNode(nil, func(_ []error) error {
+			<-ctx.Done() // does not return until test is over
+			return ctx.Err()
 		})
-		check = lazyexp.NewNode(
-			lazyexp.Dependencies{lazyexp.AbortOnError(errNode), lazyexp.ContinueOnError(siblingNode)},
-			func(context.Context, []error) error {
-				t.Errorf("did not expect fetch to get called")
-				return errors.New("wat")
-			},
-		)
-		err = check.FetchStrict(context.Background())
 	)
-	done <- struct{}{}
-	if err != err1 {
-		t.Errorf("expected %v, got %v", err1, err)
+	defer cancel()
+	for _, testIO := range []struct {
+		name         string
+		dependencies lazyexp.Dependencies
+		expectErrs   []error // nil if no fetch expected
+		expectResult error
+	}{
+		{"ContinueOnError: single error", lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1)}, []error{err1}, fetchErr},
+		{"ContinueOnError: multi error", lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1), lazyexp.ContinueOnError(errNode2)}, []error{err1, err2}, fetchErr},
+
+		{"AbortOnError: single success", lazyexp.Dependencies{lazyexp.AbortOnError(nilNode)}, []error{nil}, fetchErr},
+		{"AbortOnError: single error", lazyexp.Dependencies{lazyexp.AbortOnError(errNode1)}, nil, err1},
+		{"AbortOnError: cancelling error", lazyexp.Dependencies{lazyexp.AbortOnError(errNode1), lazyexp.ContinueOnError(noreturnNode)}, nil, err1},
+
+		{"CancelOnError: single success", lazyexp.Dependencies{lazyexp.CancelOnError(nilNode)}, []error{nil}, fetchErr},
+		{"CancelOnError: multi success", lazyexp.Dependencies{lazyexp.CancelOnError(nilNode), lazyexp.CancelOnError(nilNode)}, []error{nil, nil}, fetchErr},
+		{"CancelOnError: single failure", lazyexp.Dependencies{lazyexp.CancelOnError(errNode1)}, []error{err1}, fetchErr},
+		{"CancelOnError: cancelling failure", lazyexp.Dependencies{lazyexp.CancelOnError(errNode1), lazyexp.ContinueOnError(noreturnNode)}, []error{err1, context.Canceled}, fetchErr},
+
+		// TODO: CancelOnCompletion
+		// TODO: CancelOnSuccess
+	} {
+		t.Run(testIO.name, func(t *testing.T) {
+			var (
+				fetched = false
+				check   = lazyexp.NewNode(
+					testIO.dependencies,
+					func(errs []error) error {
+						if testIO.expectErrs == nil {
+							t.Errorf("did not expect fetch to be called!")
+						} else if !reflect.DeepEqual(errs, testIO.expectErrs) {
+							t.Errorf("expected errs %v, got %v", testIO.expectErrs, errs)
+						}
+						fetched = true
+						return fetchErr
+					},
+				)
+				result = check.Fetch()
+			)
+			if result != testIO.expectResult {
+				t.Errorf("expected fetch to return %v, got %v", testIO.expectResult, result)
+			}
+			if testIO.expectErrs != nil && !fetched {
+				t.Errorf("expected fetch function to be called")
+			}
+		})
 	}
 }
+
+// TODO: Think of a way to test strict mode. But that's testing for the absence of an event (early completion) again, which isn't reliable, right?
 
 // TODO: test precheckDependencies
