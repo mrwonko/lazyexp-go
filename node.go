@@ -139,7 +139,7 @@ func (n *node) fetch(ctx context.Context, strict bool) error {
 					data.abortErr = abortErr
 				}
 			default: // multiple cancelling dependencies
-				if abort, abortErr := fetchMultiCancel(data.cancelingDependencies, data.nonCancelingDependencies, strict, fetch, data.errs); !data.abort {
+				if abort, abortErr := fetchMultiCancel(data.cancelingDependencies, data.nonCancelingDependencies, fetch, data.errs); !data.abort {
 					data.abort = abort
 					data.abortErr = abortErr
 				}
@@ -258,7 +258,7 @@ func fetchSingleCancel(cancelingDep dependencyIndex, nonCancelingDeps []dependen
 	return
 }
 
-func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []dependencyIndex, strict bool, fetch func(dependencyIndex) error, errs []error) (abort bool, abortErr error) {
+func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []dependencyIndex, fetch func(dependencyIndex) error, errs []error) (abort bool, abortErr error) {
 	type doneEvent struct {
 		index int
 		err   error
@@ -268,13 +268,10 @@ func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []depend
 	cancelChan := make(chan doneEvent, len(cancelingDeps))
 	abortChan := make(chan doneEvent, len(cancelingDeps))
 	remainingIndices := map[int]struct{}{}
-	var wg sync.WaitGroup
-	wg.Add(len(cancelingDeps) + len(nonCancelingDeps))
 	for _, dep := range nonCancelingDeps {
 		remainingIndices[dep.index] = struct{}{}
 		go func(dep dependencyIndex) {
 			doneChan <- doneEvent{dep.index, fetch(dep)}
-			wg.Done()
 		}(dep)
 	}
 	for _, dep := range cancelingDeps {
@@ -288,7 +285,6 @@ func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []depend
 			} else {
 				doneChan <- ev
 			}
-			wg.Done()
 		}(dep)
 	}
 	for len(remainingIndices) > 0 {
@@ -308,9 +304,6 @@ func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []depend
 			abortErr = ev.err
 			remainingIndices = nil
 		}
-	}
-	if strict {
-		wg.Wait()
 	}
 	return
 }
