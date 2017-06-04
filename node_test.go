@@ -247,7 +247,3 @@ func TestPrivateFunctions(t *testing.T) {
 		}
 	})
 }
-
-func TestFetchUncanceled(t *testing.T) {
-
-}
