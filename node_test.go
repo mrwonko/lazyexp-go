@@ -1,173 +1,253 @@
-package lazyexp_test
+package lazyexp
 
 import (
 	"context"
 	"errors"
 	"reflect"
 	"testing"
-
-	"github.com/mrwonko/lazyexp-go"
 )
 
-type ConstNode struct {
-	lazyexp.Node
-	value int
-}
-
-func NewConstNode(fetch func() int) *ConstNode {
-	// we need this set-Fetcher-later idiom because we need a pointer into the object we're creating
-	// (what we really want is to override a private virtual member function)
-	res := &ConstNode{}
-	res.Node = lazyexp.NewNode(nil, func([]error) error {
-		res.value = fetch()
-		return nil
-	})
-	return res
-}
-
-func (c *ConstNode) Value() int {
-	// could Fetch(c) here to be safe, but we know what we're doing
-	return c.value
-}
-
-type SumNode struct {
-	lazyexp.Node
-	sum int
-}
-
-func NewSumNode(lhs, rhs *ConstNode) *SumNode {
-	res := &SumNode{}
-	res.Node = lazyexp.NewNode(
-		lazyexp.Dependencies{lazyexp.AbortOnError(lhs), lazyexp.AbortOnError(rhs)},
-		func([]error) error {
-			res.sum = lhs.Value() + rhs.Value()
-			return nil
-		})
-	return res
-}
-
-func (s *SumNode) Value() int {
-	// could Fetch() here to be safe, but we know what we're doing
-	return s.sum
-}
-
-func TestShouldFetchLazilyOnce(t *testing.T) {
-	oneFetchCount := 0
-	one := NewConstNode(func() int {
-		oneFetchCount++
-		return 1
-	})
-	sum := NewSumNode(one, one)
-	sum.Fetch()
-	if oneFetchCount != 1 {
-		t.Errorf("expected 1 fetch after fetching sum initially, got %d", oneFetchCount)
-	}
-	if got := sum.Value(); got != 2 {
-		t.Errorf("expected 1+1=2, got %d", got)
-	}
-	if oneFetchCount != 1 {
-		t.Errorf("expected 1 fetch after getting sum initially, got %d", oneFetchCount)
-	}
-	sum.Fetch()
-	if oneFetchCount != 1 {
-		t.Errorf("still expected 1 fetch after fetching sum again, got %d", oneFetchCount)
-	}
-	if got := sum.Value(); got != 2 {
-		t.Errorf("still expected 1+1=2, got %d", got)
-	}
-	if oneFetchCount != 1 {
-		t.Errorf("still expected 1 fetch after getting sum again, got %d", oneFetchCount)
-	}
-}
-
-func TestShouldFetchInParallel(t *testing.T) {
-	// two leafs that block until the other one is being evaluated
-	fetchStarted := [...]chan struct{}{
-		make(chan struct{}, 1),
-		make(chan struct{}, 1),
-	}
-	leafs := [2]*ConstNode{}
-	for i := range leafs {
-		j := i
-		leafs[i] = NewConstNode(func() int {
-			close(fetchStarted[j])
-			// wait for other node to be fetched
-			<-fetchStarted[1-j]
-			return j
-		})
-	}
-	root := NewSumNode(leafs[0], leafs[1])
-	// this will block indefinitely if the values are fetched sequentially
-	root.Fetch()
-	if got := root.Value(); got != 1 {
-		t.Errorf("expected 0+1=1, got %d", got)
-	}
-}
-
-func TestCancelOnError(t *testing.T) {
-	// strictly speaking reusing these nodes means the prefetch optimization will take different code paths on later subtests, so their order could matter... but it shouldn't
+func TestPrivateFunctions(t *testing.T) {
 	var (
-		nilNode      = lazyexp.NewNode(nil, func([]error) error { return nil })
-		err1         = errors.New("child error 1")
-		err2         = errors.New("child error 2")
-		fetchErr     = errors.New("root fetch failure")
-		errNode1     = lazyexp.NewNode(nil, func([]error) error { return err1 })
-		errNode2     = lazyexp.NewNode(nil, func([]error) error { return err2 })
-		ctx, cancel  = context.WithCancel(context.Background())
-		noreturnNode = lazyexp.NewNode(nil, func(_ []error) error {
-			<-ctx.Done() // does not return until test is over
-			return ctx.Err()
-		})
+		err            = errors.New("err")
+		fetchedSuccess = NewNode(nil, func([]error) error { return nil })
+		fetchedFailure = NewNode(nil, func([]error) error { return err })
+		ctx, cancel    = context.WithCancel(context.Background())
+		unfechted      = NewNode(nil, func([]error) error { <-ctx.Done(); return nil })
+		continuing     = ContinueOnError(unfechted)
+		cancelling     = CancelOnError(unfechted)
+		aborting       = AbortOnError(unfechted)
+		canceled       = CancelOnError(fetchedFailure)
+		aborted        = AbortOnError(fetchedFailure)
+		success        = ContinueOnError(fetchedSuccess)
+		failure        = ContinueOnError(fetchedFailure)
 	)
+	fetchedSuccess.Fetch()
+	fetchedFailure.Fetch()
 	defer cancel()
-	for _, testIO := range []struct {
-		name         string
-		dependencies lazyexp.Dependencies
-		expectErrs   []error // nil if no fetch expected
-		expectResult error
-	}{
-		{"ContinueOnError: single error", lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1)}, []error{err1}, fetchErr},
-		{"ContinueOnError: multi error", lazyexp.Dependencies{lazyexp.ContinueOnError(errNode1), lazyexp.ContinueOnError(errNode2)}, []error{err1, err2}, fetchErr},
-
-		{"AbortOnError: single success", lazyexp.Dependencies{lazyexp.AbortOnError(nilNode)}, []error{nil}, fetchErr},
-		{"AbortOnError: single error", lazyexp.Dependencies{lazyexp.AbortOnError(errNode1)}, nil, err1},
-		{"AbortOnError: cancelling error", lazyexp.Dependencies{lazyexp.AbortOnError(errNode1), lazyexp.ContinueOnError(noreturnNode)}, nil, err1},
-
-		{"CancelOnError: single success", lazyexp.Dependencies{lazyexp.CancelOnError(nilNode)}, []error{nil}, fetchErr},
-		{"CancelOnError: multi success", lazyexp.Dependencies{lazyexp.CancelOnError(nilNode), lazyexp.CancelOnError(nilNode)}, []error{nil, nil}, fetchErr},
-		{"CancelOnError: single failure", lazyexp.Dependencies{lazyexp.CancelOnError(errNode1)}, []error{err1}, fetchErr},
-		{"CancelOnError: cancelling failure", lazyexp.Dependencies{lazyexp.CancelOnError(errNode1), lazyexp.ContinueOnError(noreturnNode)}, []error{err1, context.Canceled}, fetchErr},
-
-		// TODO: CancelOnCompletion
-		// TODO: CancelOnSuccess
-	} {
-		t.Run(testIO.name, func(t *testing.T) {
-			var (
-				fetched = false
-				check   = lazyexp.NewNode(
-					testIO.dependencies,
-					func(errs []error) error {
-						if testIO.expectErrs == nil {
-							t.Errorf("did not expect fetch to be called!")
-						} else if !reflect.DeepEqual(errs, testIO.expectErrs) {
-							t.Errorf("expected errs %v, got %v", testIO.expectErrs, errs)
-						}
-						fetched = true
-						return fetchErr
-					},
-				)
-				result = check.Fetch()
-			)
-			if result != testIO.expectResult {
-				t.Errorf("expected fetch to return %v, got %v", testIO.expectResult, result)
+	t.Run("precheckDependencies", func(t *testing.T) {
+		for _, testIO := range []struct {
+			name         string
+			dependencies Dependencies
+			expected     precheckedDependencies
+		}{
+			{
+				"no dependencies",
+				nil,
+				precheckedDependencies{
+					abort:    false,
+					abortErr: nil,
+					cancel:   false,
+					errs:     []error{},
+					cancellingDependencies:    []dependencyIndex{},
+					nonCancellingDependencies: []dependencyIndex{},
+				},
+			},
+			{
+				"success",
+				Dependencies{success},
+				precheckedDependencies{
+					abort:    false,
+					abortErr: nil,
+					cancel:   false,
+					errs:     []error{nil},
+					cancellingDependencies:    []dependencyIndex{},
+					nonCancellingDependencies: []dependencyIndex{},
+				},
+			},
+			{
+				"failure",
+				Dependencies{failure},
+				precheckedDependencies{
+					abort:    false,
+					abortErr: nil,
+					cancel:   false,
+					errs:     []error{err},
+					cancellingDependencies:    []dependencyIndex{},
+					nonCancellingDependencies: []dependencyIndex{},
+				},
+			},
+			{
+				"unfetched continue",
+				Dependencies{continuing},
+				precheckedDependencies{
+					abort:    false,
+					abortErr: nil,
+					cancel:   false,
+					errs:     []error{nil},
+					cancellingDependencies:    []dependencyIndex{},
+					nonCancellingDependencies: []dependencyIndex{{continuing, 0}},
+				},
+			},
+			{
+				"unfetched cancel",
+				Dependencies{cancelling},
+				precheckedDependencies{
+					abort:    false,
+					abortErr: nil,
+					cancel:   false,
+					errs:     []error{nil},
+					cancellingDependencies:    []dependencyIndex{{cancelling, 0}},
+					nonCancellingDependencies: []dependencyIndex{},
+				},
+			},
+			{
+				"unfetched abort",
+				Dependencies{aborting},
+				precheckedDependencies{
+					abort:    false,
+					abortErr: nil,
+					cancel:   false,
+					errs:     []error{nil},
+					cancellingDependencies:    []dependencyIndex{{aborting, 0}},
+					nonCancellingDependencies: []dependencyIndex{},
+				},
+			},
+			{
+				"cancelled",
+				Dependencies{canceled, continuing, cancelling},
+				precheckedDependencies{
+					abort:    false,
+					abortErr: nil,
+					cancel:   true,
+					errs:     []error{err, context.Canceled, context.Canceled},
+					cancellingDependencies:    []dependencyIndex{{cancelling, 2}},
+					nonCancellingDependencies: []dependencyIndex{{continuing, 1}},
+				},
+			},
+			{
+				"aborted",
+				Dependencies{aborted, continuing},
+				precheckedDependencies{
+					abort:    true,
+					abortErr: err,
+					cancel:   false,
+					errs:     []error{err, nil},
+					cancellingDependencies:    []dependencyIndex{},
+					nonCancellingDependencies: []dependencyIndex{{continuing, 1}},
+				},
+			},
+		} {
+			t.Run(testIO.name, func(t *testing.T) {
+				got := precheckDependencies(testIO.dependencies)
+				if !reflect.DeepEqual(got, testIO.expected) {
+					t.Errorf("expected\n %#v\n, got\n %#v", testIO.expected, got)
+				}
+			})
+		}
+	})
+	t.Run("fetchSingleCancel", func(t *testing.T) {
+		for _, testIO := range []struct {
+			name              string
+			cancellingDep     dependencyIndex
+			nonCancellingDeps []dependencyIndex
+			expectedErrs      []error
+			expectedAbort     bool
+			expectedAbortErr  error
+		}{
+			{
+				"fetch all",
+				dependencyIndex{failure, 0},
+				[]dependencyIndex{{success, 1}},
+				[]error{err, nil},
+				false,
+				nil,
+			},
+			{
+				"cancel nothing",
+				dependencyIndex{canceled, 0},
+				[]dependencyIndex{},
+				[]error{err},
+				false,
+				nil,
+			},
+			{
+				"abort nothing",
+				dependencyIndex{aborted, 0},
+				[]dependencyIndex{},
+				[]error{err},
+				true,
+				err,
+			},
+			{
+				"cancel",
+				dependencyIndex{canceled, 0},
+				[]dependencyIndex{{continuing, 1}},
+				[]error{err, context.Canceled},
+				false,
+				nil,
+			},
+			{
+				"abort",
+				dependencyIndex{aborted, 0},
+				[]dependencyIndex{{continuing, 1}},
+				[]error{err, nil},
+				true,
+				err,
+			},
+		} {
+			errs := make([]error, len(testIO.expectedErrs))
+			abort, abortErr := fetchSingleCancel(testIO.cancellingDep, testIO.nonCancellingDeps, func(dep dependencyIndex) error { return dep.node.Fetch() }, errs)
+			if abort != testIO.expectedAbort {
+				t.Errorf("expected abort = %t, got %t", testIO.expectedAbort, abort)
 			}
-			if testIO.expectErrs != nil && !fetched {
-				t.Errorf("expected fetch function to be called")
+			if abortErr != testIO.expectedAbortErr {
+				t.Errorf("expected abort error %v, got %v", testIO.expectedAbortErr, abortErr)
 			}
-		})
-	}
+			if !reflect.DeepEqual(testIO.expectedErrs, errs) {
+				t.Errorf("expected errs %v, got %v", testIO.expectedErrs, errs)
+			}
+		}
+	})
+	t.Run("fetchMultiCancel", func(t *testing.T) {
+		for _, testIO := range []struct {
+			name              string
+			cancellingDeps    []dependencyIndex
+			nonCancellingDeps []dependencyIndex
+			expectedErrs      []error
+			expectedAbort     bool
+			expectedAbortErr  error
+		}{
+			{
+				"uncancelled",
+				[]dependencyIndex{{success, 0}, {failure, 1}},
+				[]dependencyIndex{{failure, 2}, {success, 3}},
+				[]error{nil, err, err, nil},
+				false,
+				nil,
+			},
+			{
+				"cancelled",
+				[]dependencyIndex{{continuing, 0}, {canceled, 1}},
+				[]dependencyIndex{{continuing, 2}},
+				[]error{context.Canceled, err, context.Canceled},
+				false,
+				nil,
+			},
+			{
+				"aborted",
+				[]dependencyIndex{{cancelling, 0}, {aborted, 1}},
+				[]dependencyIndex{{continuing, 2}},
+				[]error{nil, nil, nil},
+				true,
+				err,
+			},
+		} {
+			errs := make([]error, len(testIO.expectedErrs))
+			abort, abortErr := fetchMultiCancel(testIO.cancellingDeps, testIO.nonCancellingDeps, func(dep dependencyIndex) error { return dep.node.Fetch() }, errs)
+			if abort != testIO.expectedAbort {
+				t.Errorf("expected abort = %t, got %t", testIO.expectedAbort, abort)
+			}
+			if abortErr != testIO.expectedAbortErr {
+				t.Errorf("expected abort error %v, got %v", testIO.expectedAbortErr, abortErr)
+			}
+			if !reflect.DeepEqual(testIO.expectedErrs, errs) {
+				t.Errorf("expected errs %v, got %v", testIO.expectedErrs, errs)
+			}
+		}
+	})
 }
 
-// TODO: Think of a way to test strict mode. But that's testing for the absence of an event (early completion) again, which isn't reliable, right?
+func TestFetchUncanceled(t *testing.T) {
 
-// TODO: test precheckDependencies
+}

@@ -125,21 +125,21 @@ func (n *node) fetch(strict bool) error {
 		if strict {
 			fetch = func(dep dependencyIndex) error { return dep.node.FetchStrict() }
 			// in strict mode, nothing cancels
-			data.nonCancelingDependencies = append(data.nonCancelingDependencies, data.cancelingDependencies...)
-			data.cancelingDependencies = nil
+			data.nonCancellingDependencies = append(data.nonCancellingDependencies, data.cancellingDependencies...)
+			data.cancellingDependencies = nil
 		}
 		if !data.cancel || strict {
 			// fetch dependencies
-			switch len(data.cancelingDependencies) {
+			switch len(data.cancellingDependencies) {
 			case 0: // no cancelling dependencies, just fetch everything
-				fetchUncanceled(data.nonCancelingDependencies, fetch, data.errs)
+				fetchUncanceled(data.nonCancellingDependencies, fetch, data.errs)
 			case 1: // exactly one cancelling dependency - we can do that on this thread
-				if abort, abortErr := fetchSingleCancel(data.cancelingDependencies[0], data.nonCancelingDependencies, fetch, data.errs); !data.abort {
+				if abort, abortErr := fetchSingleCancel(data.cancellingDependencies[0], data.nonCancellingDependencies, fetch, data.errs); !data.abort {
 					data.abort = abort
 					data.abortErr = abortErr
 				}
 			default: // multiple cancelling dependencies
-				if abort, abortErr := fetchMultiCancel(data.cancelingDependencies, data.nonCancelingDependencies, fetch, data.errs); !data.abort {
+				if abort, abortErr := fetchMultiCancel(data.cancellingDependencies, data.nonCancellingDependencies, fetch, data.errs); !data.abort {
 					data.abort = abort
 					data.abortErr = abortErr
 				}
@@ -158,16 +158,18 @@ func (n *node) fetch(strict bool) error {
 	return n.err
 }
 
-func precheckDependencies(dependencies Dependencies) (result struct {
-	cancelingDependencies    []dependencyIndex
-	nonCancelingDependencies []dependencyIndex
-	errs                     []error // result of fetching the dependencies
-	abort                    bool
-	abortErr                 error // if abort == true, this is the reason for abortion
-	cancel                   bool
-}) {
-	result.cancelingDependencies = make([]dependencyIndex, 0, len(dependencies))
-	result.nonCancelingDependencies = make([]dependencyIndex, 0, len(dependencies))
+type precheckedDependencies struct {
+	cancellingDependencies    []dependencyIndex
+	nonCancellingDependencies []dependencyIndex
+	errs                      []error // result of fetching the dependencies
+	abort                     bool
+	abortErr                  error // if abort == true, this is the reason for abortion
+	cancel                    bool
+}
+
+func precheckDependencies(dependencies Dependencies) (result precheckedDependencies) {
+	result.cancellingDependencies = make([]dependencyIndex, 0, len(dependencies))
+	result.nonCancellingDependencies = make([]dependencyIndex, 0, len(dependencies))
 	result.errs = make([]error, len(dependencies))
 	// find dependencies that are not yet fetched
 	for i, dep := range dependencies {
@@ -182,17 +184,17 @@ func precheckDependencies(dependencies Dependencies) (result struct {
 			}
 		} else {
 			if dep.onCompletion.Cancel() || dep.onCompletion.Abort() {
-				result.cancelingDependencies = append(result.cancelingDependencies, dependencyIndex{Dependency: dep, index: i})
+				result.cancellingDependencies = append(result.cancellingDependencies, dependencyIndex{Dependency: dep, index: i})
 			} else {
-				result.nonCancelingDependencies = append(result.nonCancelingDependencies, dependencyIndex{Dependency: dep, index: i})
+				result.nonCancellingDependencies = append(result.nonCancellingDependencies, dependencyIndex{Dependency: dep, index: i})
 			}
 		}
 	}
 	if result.cancel {
-		for _, dep := range result.cancelingDependencies {
+		for _, dep := range result.cancellingDependencies {
 			result.errs[dep.index] = context.Canceled
 		}
-		for _, dep := range result.nonCancelingDependencies {
+		for _, dep := range result.nonCancellingDependencies {
 			result.errs[dep.index] = context.Canceled
 		}
 	}
@@ -219,35 +221,35 @@ func fetchUncanceled(deps []dependencyIndex, fetch func(dependencyIndex) error, 
 	}
 }
 
-func fetchSingleCancel(cancelingDep dependencyIndex, nonCancelingDeps []dependencyIndex, fetch func(dependencyIndex) error, errs []error) (abort bool, abortErr error) {
-	if len(nonCancelingDeps) == 0 {
+func fetchSingleCancel(cancellingDep dependencyIndex, nonCancellingDeps []dependencyIndex, fetch func(dependencyIndex) error, errs []error) (abort bool, abortErr error) {
+	if len(nonCancellingDeps) == 0 {
 		// nothing being canceled
-		errs[cancelingDep.index] = fetch(cancelingDep)
-		if cancelingDep.onCompletion.Abort() && cancelingDep.onCompletion.Match(errs[cancelingDep.index]) {
+		errs[cancellingDep.index] = fetch(cancellingDep)
+		if cancellingDep.onCompletion.Abort() && cancellingDep.onCompletion.Match(errs[cancellingDep.index]) {
 			abort = true
-			abortErr = errs[cancelingDep.index]
+			abortErr = errs[cancellingDep.index]
 		}
 	} else {
 		// need to be careful to only set each err once
-		once := make([]sync.Once, len(nonCancelingDeps))
+		once := make([]sync.Once, len(nonCancellingDeps))
 		var wg sync.WaitGroup
-		wg.Add(len(nonCancelingDeps))
-		for i := range nonCancelingDeps {
+		wg.Add(len(nonCancellingDeps))
+		for i := range nonCancellingDeps {
 			go func(i int) {
-				err := fetch(nonCancelingDeps[i])
-				once[i].Do(func() { errs[nonCancelingDeps[i].index] = err })
+				err := fetch(nonCancellingDeps[i])
+				once[i].Do(func() { errs[nonCancellingDeps[i].index] = err })
 				wg.Done()
 			}(i)
 		}
-		errs[cancelingDep.index] = fetch(cancelingDep)
-		if cancelingDep.onCompletion.Match(errs[cancelingDep.index]) {
-			if cancelingDep.onCompletion.Abort() {
+		errs[cancellingDep.index] = fetch(cancellingDep)
+		if cancellingDep.onCompletion.Match(errs[cancellingDep.index]) {
+			if cancellingDep.onCompletion.Abort() {
 				abort = true
-				abortErr = errs[cancelingDep.index]
+				abortErr = errs[cancellingDep.index]
 			} else {
 				// canceled, set unfinished dependencies' error
-				for i := range nonCancelingDeps {
-					once[i].Do(func() { errs[nonCancelingDeps[i].index] = context.Canceled })
+				for i := range nonCancellingDeps {
+					once[i].Do(func() { errs[nonCancellingDeps[i].index] = context.Canceled })
 				}
 			}
 		} else {
