@@ -31,14 +31,10 @@ var dotTemplate = template.Must(template.New("dot").Funcs(
 {{- range $id, $node := .}}
 	node{{$id}} [label="{{$node.Description | escapeLabel}}"
 		{{- if $node.Evaluated -}}
-			{{- if $node.Err -}}
-				,color=red
-			{{- else -}}
-				,color=green
-			{{- end -}}
+			,color={{if $node.Err}}red{{else}}green{{end}}
 		{{- end -}}
 	];
-{{- range $dep := $node.Dependencies}}
+	{{- range $dep := $node.Dependencies}}
 	node{{$dep.ID}} -> node{{$id}} [
 		{{- if discarded $dep.Err -}}
 			color=grey
@@ -48,10 +44,10 @@ var dotTemplate = template.Must(template.New("dot").Funcs(
 			color=green
 		{{- end -}}
 	];
-{{- end}}
-{{- if isChild $node.Child}}
+	{{- end}}
+	{{- if isChild $node.Child}}
 	node{{$node.Child}} -> node{{$id}} [style=dotted];
-{{- end}}
+	{{- end}}
 {{- end}}
 }
 `))
