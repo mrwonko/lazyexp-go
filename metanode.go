@@ -47,4 +47,20 @@ func (m *metaNode) fetched() bool {
 			m.result.fetched())
 }
 
+func (m *metaNode) flatten(nf *nodeFlattener) ID {
+	fetcherID := m.fetcherNode.flatten(nf)
+	// if the fetcherNode is not done evaluating, return it instead
+	if !nf.result[fetcherID].Evaluated {
+		return fetcherID
+	}
+	// if the fetcherNode encountered an error, return it
+	if m.fetcherNode.err != nil {
+		return fetcherID
+	}
+	fn := nf.result[fetcherID]
+	fn.Child = m.result.flatten(nf)
+	nf.result[fetcherID] = fn
+	return fetcherID
+}
+
 func (m *metaNode) noUserImplementations() {}

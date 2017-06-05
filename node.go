@@ -15,6 +15,7 @@ type Node interface {
 	// FetchStrict never cancels siblings on error and can be useful for debugging, but should generally be avoided.
 	FetchStrict() error
 	fetched() bool
+	flatten(*nodeFlattener) ID
 	noUserImplementations()
 }
 
@@ -90,16 +91,20 @@ func newNode(dependencies Dependencies, fetch func([]error) error) *node {
 		fetcher:      fetch,
 		dependencies: dependencies,
 		fetchedChan:  make(chan struct{}),
+		fetchingChan: make(chan struct{}),
 	}
 }
 
 type node struct {
 	fetcher      func([]error) error
 	dependencies Dependencies
+	depErrs      []error
 	once         sync.Once
 	err          error
 	iFetched     int32
 	fetchedChan  chan struct{}
+	iFetching    int32
+	fetchingChan chan struct{}
 	start, end   time.Time
 }
 
@@ -115,8 +120,8 @@ func (n *node) complete(err error) {
 
 func (n *node) fetch(strict bool) error {
 	n.once.Do(func() {
-
 		data := precheckDependencies(n.dependencies)
+		n.depErrs = data.errs
 		if data.abort && !strict {
 			n.complete(data.abortErr)
 			return
@@ -149,7 +154,9 @@ func (n *node) fetch(strict bool) error {
 			n.complete(data.abortErr)
 		} else {
 			// fetch this node
+			atomic.StoreInt32(&n.iFetching, 1)
 			n.start = time.Now()
+			close(n.fetchingChan)
 			err := n.fetcher(data.errs)
 			n.end = time.Now()
 			n.complete(err)
@@ -310,6 +317,7 @@ func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []depend
 	return
 }
 
+// fetched implies that n.depErrs has been set and n.start and n.end won't change any more (though they may be zero in case of abortion)
 func (n *node) fetched() bool {
 	fetched := atomic.LoadInt32(&n.iFetched) != 0
 	if fetched {
@@ -317,6 +325,47 @@ func (n *node) fetched() bool {
 		<-n.fetchedChan
 	}
 	return fetched
+}
+
+// fetching implies that n.start and n.depErrs have been set
+func (n *node) fetching() bool {
+	fetching := atomic.LoadInt32(&n.iFetching) != 0
+	if fetching {
+		// atomic reads are no write barriers, so we still need to synchronize before we can access the result
+		<-n.fetchingChan
+	}
+	return fetching
+}
+
+func (n *node) flatten(nf *nodeFlattener) ID {
+	id, visited := nf.getID(n)
+	if visited {
+		return id
+	}
+	fn := FlatNode{
+		ID:           id,
+		Child:        NoChild,
+		Dependencies: make([]FlatDependency, len(n.dependencies)),
+	}
+	fetching := n.fetching()
+	fetched := n.fetched()
+	if fetching {
+		fn.FetchStartTime = n.start
+	}
+	if fetched {
+		fn.Evaluated = true
+		fn.FetchCompleteTime = n.end
+	}
+	dependenciesComplete := fetched || fetching
+	for i, dep := range n.dependencies {
+		fn.Dependencies[i].ID = dep.node.flatten(nf)
+		if dependenciesComplete {
+			// FIXME: handle abortion
+			fn.Dependencies[i].Err = n.depErrs[i]
+		}
+	}
+	nf.result[id] = fn
+	return id
 }
 
 func (n *node) noUserImplementations() {}
