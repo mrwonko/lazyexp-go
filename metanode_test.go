@@ -3,10 +3,9 @@ package lazyexp_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
-
-	"fmt"
 
 	"github.com/mrwonko/lazyexp-go"
 )
@@ -90,7 +89,7 @@ func (c *NodeCache) User(id int) *UserNode {
 			}
 			return nil
 		}, func(bool) string {
-			return fmt.Sprintf("user %s wish list (%d)", user.Name, id)
+			return fmt.Sprintf("user %s (%d) wish list", user.Name, id)
 		}), nil
 	}, func(success bool) string {
 		if success {

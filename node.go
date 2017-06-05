@@ -263,14 +263,13 @@ func fetchSingleCancel(cancellingDep dependencyIndex, nonCancellingDeps []depend
 		}
 		errs[cancellingDep.index] = fetch(cancellingDep)
 		if cancellingDep.onCompletion.Match(errs[cancellingDep.index]) {
+			// set unfinished dependencies' error
+			for i := range nonCancellingDeps {
+				once[i].Do(func() { errs[nonCancellingDeps[i].index] = Discarded })
+			}
 			if cancellingDep.onCompletion.Abort() {
 				abort = true
 				abortErr = errs[cancellingDep.index]
-			} else {
-				// canceled, set unfinished dependencies' error
-				for i := range nonCancellingDeps {
-					once[i].Do(func() { errs[nonCancellingDeps[i].index] = Discarded })
-				}
 			}
 		} else {
 			// did not cause cancellation, await other dependencies
@@ -324,6 +323,12 @@ func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []depend
 		case ev := <-abortChan:
 			abort = true
 			abortErr = ev.err
+			// the errors are still of interest in serialization
+			errs[ev.index] = ev.err
+			delete(remainingIndices, ev.index)
+			for i := range remainingIndices {
+				errs[i] = Discarded
+			}
 			remainingIndices = nil
 		}
 	}
@@ -367,6 +372,7 @@ func (n *node) flatten(nf *nodeFlattener) ID {
 	}
 	if fetched {
 		fn.Evaluated = true
+		fn.Err = n.err
 		fn.FetchCompleteTime = n.end
 	}
 	fn.Description = n.toString(fetched && n.err == nil)

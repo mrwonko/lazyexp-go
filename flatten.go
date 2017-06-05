@@ -30,6 +30,7 @@ type FlatNode struct {
 	Child             ID
 	Dependencies      []FlatDependency
 	Evaluated         bool
+	Err               error
 	FetchStartTime    time.Time // Zero if not yet started to fetch
 	FetchCompleteTime time.Time // Zero if not yet fetched
 }
