@@ -373,7 +373,7 @@ func (n *node) flatten(nf *nodeFlattener) ID {
 	if fetched {
 		fn.Evaluated = true
 		fn.Err = n.err
-		fn.FetchCompleteTime = n.end
+		fn.FetchEndTime = n.end
 	}
 	fn.Description = n.toString(fetched && n.err == nil)
 	dependenciesComplete := fetched || fetching

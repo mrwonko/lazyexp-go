@@ -25,14 +25,14 @@ type FlatDependency struct {
 
 // FlatNode is a non-recursive Node representation
 type FlatNode struct {
-	ID                ID
-	Description       string
-	Child             ID
-	Dependencies      []FlatDependency
-	Evaluated         bool
-	Err               error
-	FetchStartTime    time.Time // Zero if not yet started to fetch
-	FetchCompleteTime time.Time // Zero if not yet fetched
+	ID             ID
+	Description    string
+	Child          ID
+	Dependencies   []FlatDependency
+	Evaluated      bool
+	Err            error
+	FetchStartTime time.Time // Zero if not yet started to fetch
+	FetchEndTime   time.Time // Zero if not yet fetched
 }
 
 // Flatten transform a Node Graph into a non-recursive representation suitable for serialization.
