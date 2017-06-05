@@ -1,7 +1,6 @@
 package lazyexp
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +26,12 @@ type Dependency struct {
 	onCompletion completionStrategy
 }
 
+// Discarded is the error for Dependencies whose results were discarded
+var Discarded DiscardedError
+
+// DiscardedError is the type of Discarded
+type DiscardedError struct{}
+
 type dependencyIndex struct {
 	Dependency
 	index int
@@ -40,24 +45,24 @@ func ContinueOnError(node Node) Dependency {
 	}
 }
 
-// CancelOnError returns a Dependency where any Node Fetch() error causes sibling Dependencies' Fetches to be canceled, but still continues with the fetch function.
-func CancelOnError(node Node) Dependency {
+// DiscardOnError returns a Dependency where any Node Fetch() error causes sibling Dependencies' Fetches to be discarded, but still continues with the fetch function.
+func DiscardOnError(node Node) Dependency {
 	return Dependency{
 		node:         node,
 		onCompletion: csError | csCancel,
 	}
 }
 
-// CancelOnCompletion returns a Dependency that upon Node Fetch() completion causes sibling Dependencies' Fetches to be canceled, but still continues with the fetch function.
-func CancelOnCompletion(node Node) Dependency {
+// DiscardOnCompletion returns a Dependency that upon Node Fetch() completion causes sibling Dependencies' Fetches to be discarded, but still continues with the fetch function.
+func DiscardOnCompletion(node Node) Dependency {
 	return Dependency{
 		node:         node,
 		onCompletion: csError | csSuccess | csCancel,
 	}
 }
 
-// CancelOnSuccess returns a Dependency that upon Node Fetch() success causes sibling Dependencies' Fetches to be canceled, but still continues with the fetch function.
-func CancelOnSuccess(node Node) Dependency {
+// DiscardOnSuccess returns a Dependency that upon Node Fetch() success causes sibling Dependencies' Fetches to be discarded, but still continues with the fetch function.
+func DiscardOnSuccess(node Node) Dependency {
 	return Dependency{
 		node:         node,
 		onCompletion: csSuccess | csCancel,
@@ -79,7 +84,7 @@ type Dependencies []Dependency
 
 // NewNode returns a Node backed by the given function.
 //
-// The fetch function must not be nil, unless you never intend to Fetch() this Node. It will be called with the errors from the optional dependencies, unless they are fatal, or context.Canceled if they returned CancelFetchSuccess().
+// The fetch function must not be nil, unless you never intend to Fetch() this Node. It will be called with the errors from the optional dependencies, unless they are fatal, or Discarded if they were discarded.
 //
 // The dependencies will be fetched in parallel before fetch() is called and must not contain zero values. Don't introduce circular dependencies or the Fetch will deadlock waiting for itself to finish.
 func NewNode(dependencies Dependencies, fetch func([]error) error) Node {
@@ -93,6 +98,12 @@ func newNode(dependencies Dependencies, fetch func([]error) error) *node {
 		fetchedChan:  make(chan struct{}),
 		fetchingChan: make(chan struct{}),
 	}
+}
+
+var _ error = DiscardedError{}
+
+func (d DiscardedError) Error() string {
+	return "discarded"
 }
 
 type node struct {
@@ -199,10 +210,10 @@ func precheckDependencies(dependencies Dependencies) (result precheckedDependenc
 	}
 	if result.cancel {
 		for _, dep := range result.cancellingDependencies {
-			result.errs[dep.index] = context.Canceled
+			result.errs[dep.index] = Discarded
 		}
 		for _, dep := range result.nonCancellingDependencies {
-			result.errs[dep.index] = context.Canceled
+			result.errs[dep.index] = Discarded
 		}
 	}
 	return
@@ -256,7 +267,7 @@ func fetchSingleCancel(cancellingDep dependencyIndex, nonCancellingDeps []depend
 			} else {
 				// canceled, set unfinished dependencies' error
 				for i := range nonCancellingDeps {
-					once[i].Do(func() { errs[nonCancellingDeps[i].index] = context.Canceled })
+					once[i].Do(func() { errs[nonCancellingDeps[i].index] = Discarded })
 				}
 			}
 		} else {
@@ -305,7 +316,7 @@ func fetchMultiCancel(cancelingDeps []dependencyIndex, nonCancelingDeps []depend
 			errs[ev.index] = ev.err
 			delete(remainingIndices, ev.index)
 			for i := range remainingIndices {
-				errs[i] = context.Canceled
+				errs[i] = Discarded
 			}
 			remainingIndices = nil
 		case ev := <-abortChan:

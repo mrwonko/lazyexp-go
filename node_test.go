@@ -15,9 +15,9 @@ func TestPrivateFunctions(t *testing.T) {
 		ctx, cancel    = context.WithCancel(context.Background())
 		unfechted      = NewNode(nil, func([]error) error { <-ctx.Done(); return nil })
 		continuing     = ContinueOnError(unfechted)
-		cancelling     = CancelOnError(unfechted)
+		cancelling     = DiscardOnError(unfechted)
 		aborting       = AbortOnError(unfechted)
-		canceled       = CancelOnError(fetchedFailure)
+		canceled       = DiscardOnError(fetchedFailure)
 		aborted        = AbortOnError(fetchedFailure)
 		success        = ContinueOnError(fetchedSuccess)
 		failure        = ContinueOnError(fetchedFailure)
@@ -110,7 +110,7 @@ func TestPrivateFunctions(t *testing.T) {
 					abort:    false,
 					abortErr: nil,
 					cancel:   true,
-					errs:     []error{err, context.Canceled, context.Canceled},
+					errs:     []error{err, Discarded, Discarded},
 					cancellingDependencies:    []dependencyIndex{{cancelling, 2}},
 					nonCancellingDependencies: []dependencyIndex{{continuing, 1}},
 				},
@@ -173,7 +173,7 @@ func TestPrivateFunctions(t *testing.T) {
 				"cancel",
 				dependencyIndex{canceled, 0},
 				[]dependencyIndex{{continuing, 1}},
-				[]error{err, context.Canceled},
+				[]error{err, Discarded},
 				false,
 				nil,
 			},
@@ -220,7 +220,7 @@ func TestPrivateFunctions(t *testing.T) {
 				"cancelled",
 				[]dependencyIndex{{continuing, 0}, {canceled, 1}},
 				[]dependencyIndex{{continuing, 2}},
-				[]error{context.Canceled, err, context.Canceled},
+				[]error{Discarded, err, Discarded},
 				false,
 				nil,
 			},
