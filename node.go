@@ -87,13 +87,14 @@ type Dependencies []Dependency
 // The fetch function must not be nil, unless you never intend to Fetch() this Node. It will be called with the errors from the optional dependencies, unless they are fatal, or Discarded if they were discarded.
 //
 // The dependencies will be fetched in parallel before fetch() is called and must not contain zero values. Don't introduce circular dependencies or the Fetch will deadlock waiting for itself to finish.
-func NewNode(dependencies Dependencies, fetch func([]error) error) Node {
-	return newNode(dependencies, fetch)
+func NewNode(dependencies Dependencies, fetch func([]error) error, toString func(successfullyFetched bool) string) Node {
+	return newNode(dependencies, fetch, toString)
 }
 
-func newNode(dependencies Dependencies, fetch func([]error) error) *node {
+func newNode(dependencies Dependencies, fetch func([]error) error, toString func(successfullyFetched bool) string) *node {
 	return &node{
 		fetcher:      fetch,
+		toString:     toString,
 		dependencies: dependencies,
 		fetchedChan:  make(chan struct{}),
 		fetchingChan: make(chan struct{}),
@@ -108,6 +109,7 @@ func (d DiscardedError) Error() string {
 
 type node struct {
 	fetcher      func([]error) error
+	toString     func(successfullyFetched bool) string
 	dependencies Dependencies
 	depErrs      []error
 	once         sync.Once
@@ -367,6 +369,7 @@ func (n *node) flatten(nf *nodeFlattener) ID {
 		fn.Evaluated = true
 		fn.FetchCompleteTime = n.end
 	}
+	fn.Description = n.toString(fetched && n.err == nil)
 	dependenciesComplete := fetched || fetching
 	for i, dep := range n.dependencies {
 		fn.Dependencies[i].ID = dep.node.flatten(nf)

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"fmt"
+
 	"github.com/mrwonko/lazyexp-go"
 )
 
@@ -21,6 +23,11 @@ func NewConstNode(fetch func() int) *ConstNode {
 	res.Node = lazyexp.NewNode(nil, func([]error) error {
 		res.value = fetch()
 		return nil
+	}, func(success bool) string {
+		if success {
+			return fmt.Sprintf("const %d", res.value)
+		}
+		return "fetching const"
 	})
 	return res
 }
@@ -42,7 +49,7 @@ func NewSumNode(lhs, rhs *ConstNode) *SumNode {
 		func([]error) error {
 			res.sum = lhs.Value() + rhs.Value()
 			return nil
-		})
+		}, func(bool) string { return "sum" })
 	return res
 }
 
@@ -107,17 +114,17 @@ func TestShouldFetchInParallel(t *testing.T) {
 func TestNodeDependencies(t *testing.T) {
 	// strictly speaking reusing these nodes means the prefetch optimization will take different code paths on later subtests, so their order could matter... but it shouldn't
 	var (
-		nilNode      = lazyexp.NewNode(nil, func([]error) error { return nil })
+		nilNode      = lazyexp.NewNode(nil, func([]error) error { return nil }, func(bool) string { return "success" })
 		err1         = errors.New("child error 1")
 		err2         = errors.New("child error 2")
 		fetchErr     = errors.New("root fetch failure")
-		errNode1     = lazyexp.NewNode(nil, func([]error) error { return err1 })
-		errNode2     = lazyexp.NewNode(nil, func([]error) error { return err2 })
+		errNode1     = lazyexp.NewNode(nil, func([]error) error { return err1 }, func(bool) string { return "error 1" })
+		errNode2     = lazyexp.NewNode(nil, func([]error) error { return err2 }, func(bool) string { return "error 2" })
 		ctx, cancel  = context.WithCancel(context.Background())
 		noreturnNode = lazyexp.NewNode(nil, func(_ []error) error {
 			<-ctx.Done() // does not return until test is over
 			return ctx.Err()
-		})
+		}, func(bool) string { return "noreturn" })
 	)
 	defer cancel()
 	for _, testIO := range []struct {
@@ -155,6 +162,7 @@ func TestNodeDependencies(t *testing.T) {
 						fetched = true
 						return fetchErr
 					},
+					func(bool) string { return "test" },
 				)
 				result = check.Fetch()
 			)

@@ -5,7 +5,7 @@ import (
 )
 
 // NewMetaNode creates a new node that itself yields nodes that are fetched when it is fetched.
-func NewMetaNode(dependencies Dependencies, fetch func([]error) (Node, error)) Node {
+func NewMetaNode(dependencies Dependencies, fetch func([]error) (Node, error), toString func(successfullyFetched bool) string) Node {
 	m := metaNode{
 		dependencies: dependencies,
 	}
@@ -13,7 +13,7 @@ func NewMetaNode(dependencies Dependencies, fetch func([]error) (Node, error)) N
 		var err error
 		m.result, err = fetch(errs)
 		return err
-	})
+	}, toString)
 	return &m
 }
 

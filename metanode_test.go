@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"fmt"
+
 	"github.com/mrwonko/lazyexp-go"
 )
 
@@ -87,7 +89,14 @@ func (c *NodeCache) User(id int) *UserNode {
 				}
 			}
 			return nil
+		}, func(bool) string {
+			return fmt.Sprintf("user %s wish list (%d)", user.Name, id)
 		}), nil
+	}, func(success bool) string {
+		if success {
+			return fmt.Sprintf("user %s (%d)", user.Name, id)
+		}
+		return fmt.Sprintf("user %d", id)
 	})
 	c.users[id] = user
 	return user
@@ -107,6 +116,11 @@ func (c *NodeCache) Article(id int) *ArticleNode {
 		}
 		article.Name = articleInfo.Name
 		return nil
+	}, func(success bool) string {
+		if success {
+			return fmt.Sprintf("article %s (%d)", article.Name, id)
+		}
+		return fmt.Sprintf("article %d", id)
 	})
 	c.articles[id] = article
 	return article
@@ -131,11 +145,13 @@ func TestMetaNode(t *testing.T) {
 		}
 		willi  = cache.User(0)
 		moritz = cache.User(1)
+		both   = lazyexp.NewNode(
+			lazyexp.Dependencies{lazyexp.AbortOnError(willi), lazyexp.AbortOnError(moritz)},
+			func([]error) error { return nil },
+			func(bool) string { return "fetch willi & moritz" },
+		)
 	)
-	err := lazyexp.NewNode(
-		lazyexp.Dependencies{lazyexp.AbortOnError(willi), lazyexp.AbortOnError(moritz)},
-		func([]error) error { return nil },
-	).Fetch()
+	err := both.Fetch()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,6 +26,7 @@ type FlatDependency struct {
 // FlatNode is a non-recursive Node representation
 type FlatNode struct {
 	ID                ID
+	Description       string
 	Child             ID
 	Dependencies      []FlatDependency
 	Evaluated         bool
