@@ -15,7 +15,7 @@ var timelineTemplate = template.Must(template.New("timeline").Funcs(
 			return t.Nanosecond() / int(time.Millisecond/time.Nanosecond)
 		},
 		"height": func(fn FlattenedNodes) int {
-			return len(fn) * 60
+			return 60 + len(fn)*40
 		},
 	},
 ).Parse(`<html>
