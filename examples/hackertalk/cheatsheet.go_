@@ -1,0 +1,39 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	lazyexp "github.com/mrwonko/lazyexp-go"
+)
+
+func main() {
+	souls := giantbombFranchise{}
+	ctx := context.Background()
+	if err := giantbombQuery(ctx, soulsFranchiseURL, franchiseFields, &souls); err != nil {
+		log.Fatal(err)
+	}
+	log.Print(souls)
+
+	game := giantbombGame{}
+	if err := giantbombQuery(ctx, souls.Results.Games[0].URL, gameFields, &game); err != nil {
+		log.Fatal(err)
+	}
+	log.Print(game)
+
+	platform := giantbombPlatform{}
+	if err := giantbombQuery(ctx, game.Results.Platforms[0].URL, platformFields, &platform); err != nil {
+		log.Fatal(err)
+	}
+	log.Print(platform)
+	return
+
+	n := lazyexp.NewNode(nil, func([]error) error { time.Sleep(120 * time.Millisecond); return nil }, func(bool) string { return "test" })
+	if err := n.Fetch(); err != nil {
+		fmt.Printf("Error: %s", err)
+	}
+	writeGraph(n, "graph")
+	writeTimeline(n, "timeline")
+}
