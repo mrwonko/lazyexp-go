@@ -10,10 +10,10 @@ import (
 func TestPrivateFunctions(t *testing.T) {
 	var (
 		err            = errors.New("err")
-		fetchedSuccess = NewNode(nil, func([]error) error { return nil }, func(bool) string { return "success" })
-		fetchedFailure = NewNode(nil, func([]error) error { return err }, func(bool) string { return "failure" })
+		fetchedSuccess = NewNode(NewFuncNodeFetcher(nil, func([]error) error { return nil }, func(bool) string { return "success" }))
+		fetchedFailure = NewNode(NewFuncNodeFetcher(nil, func([]error) error { return err }, func(bool) string { return "failure" }))
 		ctx, cancel    = context.WithCancel(context.Background())
-		unfechted      = NewNode(nil, func([]error) error { <-ctx.Done(); return nil }, func(bool) string { return "fetching" })
+		unfechted      = NewNode(NewFuncNodeFetcher(nil, func([]error) error { <-ctx.Done(); return nil }, func(bool) string { return "fetching" }))
 		continuing     = ContinueOnError(unfechted)
 		cancelling     = DiscardOnError(unfechted)
 		aborting       = AbortOnError(unfechted)

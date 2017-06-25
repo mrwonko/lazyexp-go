@@ -7,24 +7,57 @@ import (
 	lazyexp "github.com/mrwonko/lazyexp-go"
 )
 
-// TODO: try interfaces instead of function arguments
-
 type franchiseNode struct {
 	lazyexp.Node
 	result giantbombFranchise
 }
 
+type franchiseNodeFetcher struct {
+	ctx  context.Context
+	url  string
+	node *franchiseNode
+}
+
+func (fetcher franchiseNodeFetcher) Dependencies() lazyexp.Dependencies { return nil }
+
+func (fetcher franchiseNodeFetcher) Fetch([]error) error {
+	return giantbombQuery(fetcher.ctx, fetcher.url, franchiseFields, &fetcher.node.result)
+}
+
+func (fetcher franchiseNodeFetcher) String(complete bool) string {
+	if complete {
+		return fetcher.node.result.Results.Deck
+	}
+	return "Franchise " + fetcher.url
+}
+
 func fetchFranchise(ctx context.Context, url string) *franchiseNode {
 	node := franchiseNode{}
-	node.Node = lazyexp.NewNode(nil, func(_ []error) error {
-		return giantbombQuery(ctx, url, franchiseFields, &node.result)
-	}, func(complete bool) string {
-		if complete {
-			return node.result.Results.Deck
-		}
-		return "Franchise " + url
-	})
+	node.Node = lazyexp.NewNode(franchiseNodeFetcher{ctx, url, &node})
 	return &node
+}
+
+type gameNodeFetcher struct {
+	ctx       context.Context
+	franchise *franchiseNode
+	index     int
+	dest      *giantbombGame
+}
+
+func (fetcher gameNodeFetcher) Dependencies() lazyexp.Dependencies { return nil }
+
+func (fetcher gameNodeFetcher) Fetch([]error) error {
+	if id := fetcher.franchise.result.Results.Games[fetcher.index].ID; id%2 == 1 {
+		return fmt.Errorf("game ID %d is odd", id)
+	}
+	return giantbombQuery(fetcher.ctx, fetcher.franchise.result.Results.Games[fetcher.index].URL, gameFields, fetcher.dest)
+}
+
+func (fetcher gameNodeFetcher) String(complete bool) string {
+	if complete {
+		return fetcher.dest.Results.Name
+	}
+	return fmt.Sprintf("game %d", fetcher.franchise.result.Results.Games[fetcher.index].ID)
 }
 
 type gamesNode struct {
@@ -32,41 +65,38 @@ type gamesNode struct {
 	result []giantbombGame
 }
 
+type gamesNodeFetcher struct {
+	ctx       context.Context
+	franchise *franchiseNode
+	node      *gamesNode
+}
+
+func (fetcher gamesNodeFetcher) Dependencies() lazyexp.Dependencies {
+	// depends on franchise
+	return lazyexp.Dependencies{lazyexp.AbortOnError(fetcher.franchise)}
+}
+
+func (fetcher gamesNodeFetcher) Fetch([]error) (lazyexp.Node, error) {
+	fetcher.node.result = make([]giantbombGame, len(fetcher.franchise.result.Results.Games))
+	var games lazyexp.Dependencies
+	for i := range fetcher.franchise.result.Results.Games {
+		node := lazyexp.NewNode(gameNodeFetcher{fetcher.ctx, fetcher.franchise, i, &fetcher.node.result[i]})
+		games = append(games, lazyexp.DiscardOnSuccess(node))
+	}
+	result := lazyexp.Join(games, nil)
+	if err := writeGraph(result, "intermediate"); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (fetcher gamesNodeFetcher) String(bool) string {
+	return "games in " + fetcher.franchise.String()
+}
+
 func fetchGames(ctx context.Context, franchise *franchiseNode) *gamesNode {
 	node := gamesNode{}
-	node.Node = lazyexp.NewMetaNode(lazyexp.Dependencies{
-		lazyexp.AbortOnError(franchise), // fetch the Franchise before this node can be fetched, abort on failure
-	}, func(_ []error) (lazyexp.Node, error) {
-		node.result = make([]giantbombGame, len(franchise.result.Results.Games))
-		var games lazyexp.Dependencies
-		for i := range franchise.result.Results.Games {
-			j := i
-			node := lazyexp.NewNode(nil, func(_ []error) error {
-				if id := franchise.result.Results.Games[j].ID; id%2 == 1 {
-					return fmt.Errorf("game ID %d is odd", id)
-				}
-				return giantbombQuery(ctx, franchise.result.Results.Games[j].URL, gameFields, &node.result[j])
-			}, func(complete bool) string {
-				if complete {
-					return node.result[j].Results.Name
-				}
-				return fmt.Sprintf("game %d", franchise.result.Results.Games[j].ID)
-			})
-			games = append(games, lazyexp.DiscardOnSuccess(node))
-		}
-		result := lazyexp.NewNode(games, func(errs []error) error {
-			fmt.Println(errs)
-			return nil
-		}, func(complete bool) string {
-			return "games awaiter"
-		})
-		if err := writeGraph(result, "intermediate"); err != nil {
-			return nil, err
-		}
-		return result, nil
-	}, func(complete bool) string {
-		return "all games"
-	})
+	node.Node = lazyexp.NewMetaNode(gamesNodeFetcher{ctx, franchise, &node})
 	return &node
 }
 

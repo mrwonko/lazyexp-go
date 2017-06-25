@@ -66,7 +66,7 @@ func (c *NodeCache) User(id int) *UserNode {
 		return user
 	}
 	user := &UserNode{}
-	user.Node = lazyexp.NewMetaNode(nil, func([]error) (lazyexp.Node, error) {
+	user.Node = lazyexp.NewMetaNode(lazyexp.NewFuncMetaNodeFetcher(nil, func([]error) (lazyexp.Node, error) {
 		userInfo, ok := c.database.Users[id]
 		if !ok {
 			return nil, errNotFound
@@ -80,7 +80,7 @@ func (c *NodeCache) User(id int) *UserNode {
 			articles[i] = article
 			deps[i] = lazyexp.ContinueOnError(article)
 		}
-		return lazyexp.NewNode(deps, func(errs []error) error {
+		return lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(deps, func(errs []error) error {
 			// only keep found articles
 			for i, err := range errs {
 				if err == nil {
@@ -90,13 +90,13 @@ func (c *NodeCache) User(id int) *UserNode {
 			return nil
 		}, func(bool) string {
 			return fmt.Sprintf("user %s (%d) wish list", user.Name, id)
-		}), nil
+		})), nil
 	}, func(success bool) string {
 		if success {
 			return fmt.Sprintf("user %s (%d)", user.Name, id)
 		}
 		return fmt.Sprintf("user %d", id)
-	})
+	}))
 	c.users[id] = user
 	return user
 }
@@ -108,7 +108,7 @@ func (c *NodeCache) Article(id int) *ArticleNode {
 		return article
 	}
 	article := &ArticleNode{}
-	article.Node = lazyexp.NewNode(nil, func([]error) error {
+	article.Node = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(nil, func([]error) error {
 		articleInfo, ok := c.database.Articles[id]
 		if !ok {
 			return errNotFound
@@ -120,7 +120,7 @@ func (c *NodeCache) Article(id int) *ArticleNode {
 			return fmt.Sprintf("article %s (%d)", article.Name, id)
 		}
 		return fmt.Sprintf("article %d", id)
-	})
+	}))
 	c.articles[id] = article
 	return article
 }
@@ -144,11 +144,11 @@ func TestMetaNode(t *testing.T) {
 		}
 		willi  = cache.User(0)
 		moritz = cache.User(1)
-		both   = lazyexp.NewNode(
+		both   = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(
 			lazyexp.Dependencies{lazyexp.AbortOnError(willi), lazyexp.AbortOnError(moritz)},
 			func([]error) error { return nil },
 			func(bool) string { return "fetch willi & moritz" },
-		)
+		))
 	)
 	err := both.Fetch()
 	if err != nil {

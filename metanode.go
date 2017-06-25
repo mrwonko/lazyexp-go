@@ -4,24 +4,74 @@ import (
 	"sync"
 )
 
-// NewMetaNode creates a new node that itself yields nodes that are fetched when it is fetched.
-func NewMetaNode(dependencies Dependencies, fetch func([]error) (Node, error), toString func(successfullyFetched bool) string) Node {
-	m := metaNode{
-		dependencies: dependencies,
+// MetaNodeFetcher is the backend for a MetaNode that does the actual retrieval.
+type MetaNodeFetcher interface {
+	Dependencies() Dependencies
+	Fetch([]error) (Node, error)
+	String(successfullyFetched bool) string
+}
+
+type funcMetaNodeFetcher struct {
+	dependencies Dependencies
+	fetch        func([]error) (Node, error)
+	toString     func(successfullyFetched bool) string
+}
+
+var _ MetaNodeFetcher = funcMetaNodeFetcher{}
+
+func (fmnf funcMetaNodeFetcher) Dependencies() Dependencies {
+	return fmnf.dependencies
+}
+
+func (fmnf funcMetaNodeFetcher) Fetch(errs []error) (Node, error) {
+	return fmnf.fetch(errs)
+}
+
+func (fmnf funcMetaNodeFetcher) String(successfullyFetched bool) string {
+	return fmnf.toString(successfullyFetched)
+}
+
+// NewFuncMetaNodeFetcher creates a MetaNodeFetcher backed by the given functions, in case you don't want to write a whole type.
+func NewFuncMetaNodeFetcher(dependencies Dependencies, fetch func([]error) (Node, error), toString func(successfullyFetched bool) string) MetaNodeFetcher {
+	return funcMetaNodeFetcher{
+		dependencies,
+		fetch,
+		toString,
 	}
-	m.fetcherNode = newNode(m.dependencies, func(errs []error) error {
-		var err error
-		m.result, err = fetch(errs)
-		return err
-	}, toString)
+}
+
+type metaNodeAdapater struct {
+	fetcher MetaNodeFetcher
+	node    *metaNode
+}
+
+var _ NodeFetcher = metaNodeAdapater{}
+
+func (mna metaNodeAdapater) Dependencies() Dependencies {
+	return mna.fetcher.Dependencies()
+}
+
+func (mna metaNodeAdapater) Fetch(errs []error) error {
+	var err error
+	mna.node.result, err = mna.fetcher.Fetch(errs)
+	return err
+}
+
+func (mna metaNodeAdapater) String(successfullyFetched bool) string {
+	return mna.fetcher.String(successfullyFetched)
+}
+
+// NewMetaNode creates a new node that itself yields nodes that are fetched when it is fetched.
+func NewMetaNode(fetcher MetaNodeFetcher) Node {
+	m := metaNode{}
+	m.fetcherNode = newNode(metaNodeAdapater{fetcher, &m})
 	return &m
 }
 
 type metaNode struct {
-	dependencies Dependencies
-	once         sync.Once
-	fetcherNode  *node
-	result       Node
+	once        sync.Once
+	fetcherNode *node
+	result      Node
 }
 
 func (m *metaNode) Fetch() error { return m.fetch(false) }
@@ -62,5 +112,7 @@ func (m *metaNode) flatten(nf *nodeFlattener) ID {
 	nf.result[fetcherID] = fn
 	return fetcherID
 }
+
+func (m *metaNode) String() string { return m.fetcherNode.String() }
 
 func (m *metaNode) noUserImplementations() {}

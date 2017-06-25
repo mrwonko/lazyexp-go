@@ -20,7 +20,7 @@ func NewConstNode(fetch func() int) *ConstNode {
 	// we need this set-Fetcher-later idiom because we need a pointer into the object we're creating
 	// (what we really want is to override a private virtual member function)
 	res := &ConstNode{}
-	res.Node = lazyexp.NewNode(nil, func([]error) error {
+	res.Node = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(nil, func([]error) error {
 		res.value = fetch()
 		return nil
 	}, func(success bool) string {
@@ -28,7 +28,7 @@ func NewConstNode(fetch func() int) *ConstNode {
 			return fmt.Sprintf("const %d", res.value)
 		}
 		return "fetching const"
-	})
+	}))
 	return res
 }
 
@@ -44,12 +44,12 @@ type SumNode struct {
 
 func NewSumNode(lhs, rhs *ConstNode) *SumNode {
 	res := &SumNode{}
-	res.Node = lazyexp.NewNode(
+	res.Node = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(
 		lazyexp.Dependencies{lazyexp.AbortOnError(lhs), lazyexp.AbortOnError(rhs)},
 		func([]error) error {
 			res.sum = lhs.Value() + rhs.Value()
 			return nil
-		}, func(bool) string { return "sum" })
+		}, func(bool) string { return "sum" }))
 	return res
 }
 
@@ -114,17 +114,17 @@ func TestShouldFetchInParallel(t *testing.T) {
 func TestNodeDependencies(t *testing.T) {
 	// strictly speaking reusing these nodes means the prefetch optimization will take different code paths on later subtests, so their order could matter... but it shouldn't
 	var (
-		nilNode      = lazyexp.NewNode(nil, func([]error) error { return nil }, func(bool) string { return "success" })
+		nilNode      = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(nil, func([]error) error { return nil }, func(bool) string { return "success" }))
 		err1         = errors.New("child error 1")
 		err2         = errors.New("child error 2")
 		fetchErr     = errors.New("root fetch failure")
-		errNode1     = lazyexp.NewNode(nil, func([]error) error { return err1 }, func(bool) string { return "error 1" })
-		errNode2     = lazyexp.NewNode(nil, func([]error) error { return err2 }, func(bool) string { return "error 2" })
+		errNode1     = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(nil, func([]error) error { return err1 }, func(bool) string { return "error 1" }))
+		errNode2     = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(nil, func([]error) error { return err2 }, func(bool) string { return "error 2" }))
 		ctx, cancel  = context.WithCancel(context.Background())
-		noreturnNode = lazyexp.NewNode(nil, func(_ []error) error {
+		noreturnNode = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(nil, func(_ []error) error {
 			<-ctx.Done() // does not return until test is over
 			return ctx.Err()
-		}, func(bool) string { return "noreturn" })
+		}, func(bool) string { return "noreturn" }))
 	)
 	defer cancel()
 	for _, testIO := range []struct {
@@ -151,7 +151,7 @@ func TestNodeDependencies(t *testing.T) {
 		t.Run(testIO.name, func(t *testing.T) {
 			var (
 				fetched = false
-				check   = lazyexp.NewNode(
+				check   = lazyexp.NewNode(lazyexp.NewFuncNodeFetcher(
 					testIO.dependencies,
 					func(errs []error) error {
 						if testIO.expectErrs == nil {
@@ -163,7 +163,7 @@ func TestNodeDependencies(t *testing.T) {
 						return fetchErr
 					},
 					func(bool) string { return "test" },
-				)
+				))
 				result = check.Fetch()
 			)
 			if result != testIO.expectResult {

@@ -13,6 +13,7 @@ type Node interface {
 	Fetch() error
 	// FetchStrict never cancels siblings on error and can be useful for debugging, but should generally be avoided.
 	FetchStrict() error
+	String() string
 	fetched() bool
 	flatten(*nodeFlattener) ID
 	noUserImplementations()
@@ -82,20 +83,103 @@ func AbortOnError(node Node) Dependency {
 // Dependencies are Nodes that must be Fetched before the given one can be.
 type Dependencies []Dependency
 
-// NewNode returns a Node backed by the given function.
+// NodeFetcher is the backend for a Node that does the actual retrieval.
 //
-// The fetch function must not be nil, unless you never intend to Fetch() this Node. It will be called with the errors from the optional dependencies, unless they are fatal, or Discarded if they were discarded.
+// Fetch will be called with the errors from the dependencies, unless they are fatal, or Discarded if they were discarded.
 //
 // The dependencies will be fetched in parallel before fetch() is called and must not contain zero values. Don't introduce circular dependencies or the Fetch will deadlock waiting for itself to finish.
-func NewNode(dependencies Dependencies, fetch func([]error) error, toString func(successfullyFetched bool) string) Node {
-	return newNode(dependencies, fetch, toString)
+//
+// This intentionally has a function named Fetch(), just like Node, because you're not supposed to implement this on your own node types that embed Node. You should instead have a separate, private fetcher type so that the fetching backend is not exposed on your node type:
+//
+//    type PubliclyVisibleNode struct {
+//    	lazyexp.Node // embed Node so this can be passed as a Dependency for other Nodes
+//    	data         string
+//    }
+//
+//    func (pvn *PubliclyVisibleNode) Data() string {
+//    	pvn.Fetch()
+//    	return pvn.data
+//    }
+//
+//    func NewPubliclyVisibleNode() *PubliclyVisibleNode {
+//    	node := PubliclyVisibleNode{}
+//    	node.Node = lazyexp.NewNode(privateNodeFetcher{&node})
+//    	return &node
+//    }
+//
+//    // separate fetch type to keep PubliclyVisibleNode's interface clean
+//    type privateNodeFetcher struct {
+//    	node *PubliclyVisibleNode
+//    }
+//
+//    func (fetcher privateNodeFetcher) Dependencies() lazyexp.Dependencies {
+//    	return nil // this example uses no Dependencies
+//    }
+//
+//    func (fetcher privateNodeFetcher) Fetch([]error) error {
+//    	var err error
+//    	fetcher.node.data, err = someSlowFetchingFunction()
+//    	return err
+//    }
+//
+//    func (fetcher privateNodeFetcher) String(successfullyFetched bool) string {
+//    	if successfullyFetched {
+//    		return "PubliclyVisibleNode: " + fetcher.node.data
+//    	}
+//    	return "PubliclyVisibleNode (not fetched)"
+//    }
+type NodeFetcher interface {
+	Dependencies() Dependencies
+	Fetch([]error) error
+	String(successfullyFetched bool) string
 }
 
-func newNode(dependencies Dependencies, fetch func([]error) error, toString func(successfullyFetched bool) string) *node {
+type funcNodeFetcher struct {
+	dependencies Dependencies
+	fetch        func([]error) error
+	toString     func(successfullyFetched bool) string
+}
+
+var _ NodeFetcher = funcNodeFetcher{}
+
+func (fnf funcNodeFetcher) Dependencies() Dependencies {
+	return fnf.dependencies
+}
+
+func (fnf funcNodeFetcher) Fetch(errs []error) error {
+	return fnf.fetch(errs)
+}
+
+func (fnf funcNodeFetcher) String(successfullyFetched bool) string {
+	return fnf.toString(successfullyFetched)
+}
+
+// NewFuncNodeFetcher creates a NodeFetcher backed by the given functions, in case you don't want to write a whole type.
+func NewFuncNodeFetcher(dependencies Dependencies, fetch func([]error) error, toString func(successfullyFetched bool) string) NodeFetcher {
+	return funcNodeFetcher{
+		dependencies,
+		fetch,
+		toString,
+	}
+}
+
+// NewNode returns a Node backed by the given NodeFetcher.
+func NewNode(nodeFetcher NodeFetcher) Node {
+	return newNode(nodeFetcher)
+}
+
+// Join is a shorthand for creating a Node that simply waits on all its Dependencies, ignoring their errors (if they continue on error) unless you supply the optional collapseErrors function.
+func Join(dependencies Dependencies, collapseErrors func([]error) error) Node {
+	if collapseErrors == nil {
+		collapseErrors = func([]error) error { return nil }
+	}
+	return NewNode(NewFuncNodeFetcher(dependencies, collapseErrors, func(bool) string { return "join" }))
+}
+
+func newNode(nodeFetcher NodeFetcher) *node {
 	return &node{
-		fetcher:      fetch,
-		toString:     toString,
-		dependencies: dependencies,
+		fetcher:      nodeFetcher,
+		dependencies: nodeFetcher.Dependencies(),
 		fetchedChan:  make(chan struct{}),
 		fetchingChan: make(chan struct{}),
 	}
@@ -108,8 +192,7 @@ func (d DiscardedError) Error() string {
 }
 
 type node struct {
-	fetcher      func([]error) error
-	toString     func(successfullyFetched bool) string
+	fetcher      NodeFetcher
 	dependencies Dependencies
 	depErrs      []error
 	once         sync.Once
@@ -170,7 +253,7 @@ func (n *node) fetch(strict bool) error {
 			atomic.StoreInt32(&n.iFetching, 1)
 			n.start = time.Now()
 			close(n.fetchingChan)
-			err := n.fetcher(data.errs)
+			err := n.fetcher.Fetch(data.errs)
 			n.end = time.Now()
 			n.complete(err)
 		}
@@ -375,7 +458,7 @@ func (n *node) flatten(nf *nodeFlattener) ID {
 		fn.Err = n.err
 		fn.FetchEndTime = n.end
 	}
-	fn.Description = n.toString(fetched && n.err == nil)
+	fn.Description = n.String()
 	dependenciesComplete := fetched || fetching
 	for i, dep := range n.dependencies {
 		fn.Dependencies[i].ID = dep.node.flatten(nf)
@@ -386,6 +469,10 @@ func (n *node) flatten(nf *nodeFlattener) ID {
 	}
 	nf.result[id] = fn
 	return id
+}
+
+func (n *node) String() string {
+	return n.fetcher.String(n.fetched() && n.err == nil)
 }
 
 func (n *node) noUserImplementations() {}
